@@ -466,20 +466,29 @@ async function request<T>(path: string, options: RequestOptions = {}, retry = tr
   }
 
   if (!res.ok) {
-    if (res.status >= 500 && path.startsWith('/auth/login')) {
-      try {
-        const bodyObj = options.body
-          ? typeof options.body === 'string'
-            ? JSON.parse(options.body)
-            : options.body
-          : {};
-        const profile = demo.byEmail(String(bodyObj.email ?? '').toLowerCase().trim());
-        if (profile && bodyObj.password === 'Password@123') {
+    if (res.status >= 500) {
+      if (path.startsWith('/auth/login')) {
+        try {
+          const bodyObj = options.body
+            ? typeof options.body === 'string'
+              ? JSON.parse(options.body)
+              : options.body
+            : {};
+          const profile = demo.byEmail(String(bodyObj.email ?? '').toLowerCase().trim());
+          if (profile && bodyObj.password === 'Password@123') {
+            localStorage.setItem('tms.demoMode', 'true');
+            return handleMockFallback(path, options) as T;
+          }
+        } catch {
+          /* proceed to error throw */
+        }
+      } else {
+        const demoUser = localStorage.getItem(DEMO_USER_KEY);
+        const cachedUser = localStorage.getItem('tms.cachedUser');
+        if (demoUser || cachedUser || localStorage.getItem('tms.demoMode') === 'true') {
           localStorage.setItem('tms.demoMode', 'true');
           return handleMockFallback(path, options) as T;
         }
-      } catch {
-        /* proceed to error throw */
       }
     }
     const error = (payload.error ?? {}) as { code?: string; message?: string; details?: unknown };
