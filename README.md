@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Task Management System
 
 Admin + Employee portals for assigning daily work, tracking progress, and automating the
@@ -180,3 +181,6 @@ docs/                    Architecture, costs, schema, permissions, API, timeline
 
 See [docs/02-infrastructure-and-cost.md](docs/02-infrastructure-and-cost.md) for the full
 deployment plan.
+=======
+# TMS
+>>>>>>> 00e2b625b22b071d572ed29303770236c6db050a
