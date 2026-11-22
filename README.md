@@ -8,7 +8,7 @@ Everything in the default setup is free: SQLite needs no server, mail falls back
 console, files are stored on local disk, and the scheduler runs in-process. Nothing here
 requires a paid account to run or to demo.
 
----
+
 
 ## Quick start
 
@@ -44,7 +44,7 @@ Sign in as `manager@acme.test` and then `ceo@acme.test` to see reporting-line ac
 control in action — the manager's employee list, org chart and reports contain only the
 people beneath them.
 
----
+
 
 ## Commands
 
@@ -70,7 +70,7 @@ npm run dev:server
 npm run dev:web
 ```
 
----
+
 
 ## What is built
 
@@ -98,7 +98,7 @@ than themselves and only inside their own reporting line · file attachments on 
 entries, scoped by the same hierarchy · Indian Standard Time throughout · a production
 bootstrap that creates one admin and no demo accounts.
 
----
+
 
 ## How the automation works
 
@@ -118,7 +118,7 @@ hourly overdue scan + "due within 24h" nudges
 Every job is idempotent, so a manual re-run from **Settings → Jobs** changes nothing that
 has already happened.
 
----
+
 
 ## Project layout
 
@@ -143,7 +143,7 @@ web/                     React + Vite + Tailwind SPA
 docs/                    Architecture, costs, schema, permissions, API, timeline
 ```
 
----
+
 
 ## Documentation
 
@@ -160,7 +160,7 @@ docs/                    Architecture, costs, schema, permissions, API, timeline
 | [docs/09-screens-and-modules.md](docs/09-screens-and-modules.md) | Every screen in both portals, and the module map |
 | [docs/10-deployment.md](docs/10-deployment.md) | Live URLs and step-by-step deployment |
 
----
+
 
 ## Moving to production
 
@@ -180,6 +180,6 @@ docs/                    Architecture, costs, schema, permissions, API, timeline
 
 See [docs/02-infrastructure-and-cost.md](docs/02-infrastructure-and-cost.md) for the full
 deployment plan.
-=======
+
 # TMS
->>>>>>> 00e2b625b22b071d572ed29303770236c6db050a
+ 00e2b625b22b071d572ed29303770236c6db050a
