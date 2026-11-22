@@ -1,4 +1,5 @@
- # Task Management System
+<<<<<<< HEAD
+# Task Management System
 
 Admin + Employee portals for assigning daily work, tracking progress, and automating the
 SOD → Task → Progress → EOD → Review cycle, with attendance, leave, reporting, an
@@ -8,20 +9,20 @@ Everything in the default setup is free: SQLite needs no server, mail falls back
 console, files are stored on local disk, and the scheduler runs in-process. Nothing here
 requires a paid account to run or to demo.
 
-
+---
 
 ## Quick start
 
-
+```bash
 npm run setup
-
+```
 
 That installs both workspaces, creates the SQLite database and seeds a demo organisation.
 Then:
 
-
+```bash
 npm run dev
-
+```
 
 - Web portal → <http://localhost:5173>
 - API → <http://localhost:4000/api/health>
@@ -44,7 +45,7 @@ Sign in as `manager@acme.test` and then `ceo@acme.test` to see reporting-line ac
 control in action — the manager's employee list, org chart and reports contain only the
 people beneath them.
 
-
+---
 
 ## Commands
 
@@ -62,15 +63,15 @@ people beneath them.
 
 Running the two servers separately is sometimes handy:
 
-
+```bash
 npm run dev:server
+```
 
-
-
+```bash
 npm run dev:web
+```
 
-
-
+---
 
 ## What is built
 
@@ -98,7 +99,7 @@ than themselves and only inside their own reporting line · file attachments on 
 entries, scoped by the same hierarchy · Indian Standard Time throughout · a production
 bootstrap that creates one admin and no demo accounts.
 
-
+---
 
 ## How the automation works
 
