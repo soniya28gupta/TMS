@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+ HEAD
 # Task Management System
 
 Admin + Employee portals for assigning daily work, tracking progress, and automating the
