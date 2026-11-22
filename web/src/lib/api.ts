@@ -29,6 +29,13 @@ export const API_BASE = (import.meta.env?.VITE_API_URL ?? '/api').replace(/\/$/,
  */
 export function isDemoMode(): boolean {
   if (import.meta.env?.VITE_DEMO_MODE === 'true') return true;
+  if (typeof window !== 'undefined') {
+    // If hosted on Vercel without an explicit API host, automatically engage demo mode
+    // so visitors can explore all screens without database connection errors.
+    if (window.location.hostname.includes('vercel.app') && localStorage.getItem('tms.demoMode') !== 'false') {
+      return true;
+    }
+  }
   try {
     return localStorage.getItem('tms.demoMode') === 'true';
   } catch {
@@ -459,6 +466,22 @@ async function request<T>(path: string, options: RequestOptions = {}, retry = tr
   }
 
   if (!res.ok) {
+    if (res.status >= 500 && path.startsWith('/auth/login')) {
+      try {
+        const bodyObj = options.body
+          ? typeof options.body === 'string'
+            ? JSON.parse(options.body)
+            : options.body
+          : {};
+        const profile = demo.byEmail(String(bodyObj.email ?? '').toLowerCase().trim());
+        if (profile && bodyObj.password === 'Password@123') {
+          localStorage.setItem('tms.demoMode', 'true');
+          return handleMockFallback(path, options) as T;
+        }
+      } catch {
+        /* proceed to error throw */
+      }
+    }
     const error = (payload.error ?? {}) as { code?: string; message?: string; details?: unknown };
     throw new ApiError(
       res.status,
