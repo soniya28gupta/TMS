@@ -1,0 +1,69 @@
+# Render blueprint for the API.
+#
+# The frontend is a static build on Vercel; this runs the Express server, which
+# needs a persistent process for the one-minute scheduler tick that drives
+# SOD/EOD generation, reminders and the overdue scan. Serverless cannot do that.
+#
+# Deploy: connect this repo in the Render dashboard → "New Blueprint".
+services:
+  - type: web
+    name: tms-api
+    runtime: node
+    plan: free
+    region: singapore # closest to Asia/Kolkata; change if your team is elsewhere
+    rootDir: .
+    # Versioned migrations rather than `db push`: production schema changes
+    # should be reviewable and replayable, not inferred at deploy time.
+    buildCommand: npm install && npm run -w server db:use:postgres && npm run -w server build && npm run -w server db:migrate:deploy
+    startCommand: npm run -w server start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000 # Render injects this; declared so the app binds correctly
+
+      # The system runs on Indian Standard Time.
+      - key: TZ
+        value: Asia/Kolkata
+
+      # Supabase (or any pooled Postgres) needs two connection strings:
+      #   DATABASE_URL — transaction pooler, port 6543. What the app runs on.
+      #   DIRECT_URL   — direct connection, port 5432. Migrations only, because
+      #                  DDL cannot run through a transaction pooler.
+      # Paste both in the Render dashboard.
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+
+      # Generated once by Render; never commit these.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      # Must list the exact Vercel origin, or the browser blocks every call.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: APP_URL
+        sync: false
+
+      # Exactly one instance may run the scheduler. The free plan is a single
+      # instance, so this is safe as written.
+      - key: SCHEDULER_ENABLED
+        value: 'true'
+
+      - key: ACCESS_TOKEN_TTL
+        value: 30m
+      - key: REFRESH_TOKEN_DAYS
+        value: '14'
+
+      # Optional: leave blank to keep mail in log-only mode.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false

@@ -1,0 +1,18 @@
+{
+  "//": "Vercel compiles api/*.ts with its own defaults, which do not enable strict mode. Zod's type inference collapses to all-optional without strictNullChecks, which produced a wall of spurious 'not assignable' errors against Prisma's input types. These settings mirror server/tsconfig.json so the function typechecks the same way the server does.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2023"],
+    "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts", "../server/src/**/*.ts"]
+}

@@ -1,0 +1,31 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.*.local
+*.log
+npm-debug.log*
+
+# Database (SQLite dev)
+server/prisma/*.db
+server/prisma/*.db-journal
+server/prisma/*.db-shm
+server/prisma/*.db-wal
+server/prisma/*.bak-*
+
+# Uploaded files
+server/storage/
+!server/storage/.gitkeep
+
+# Generated Prisma client
+server/node_modules/.prisma/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+.vercel
+.env*

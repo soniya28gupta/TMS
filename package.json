@@ -1,0 +1,31 @@
+{
+  "name": "task-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Task Management System — Admin + Employee portals, SOD/EOD automation, attendance, leave, reports",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "setup": "npm install && npm run db:setup",
+    "db:setup": "npm run -w server db:push && npm run -w server db:seed",
+    "db:reset": "npm run -w server db:reset",
+    "admin:set-email": "npm run -w server admin:set-email --",
+    "demo:enable": "npm run -w server demo:enable",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run -w server dev",
+    "dev:web": "npm run -w web dev",
+    "build": "npm run -w server build && npm run -w web build",
+    "vercel-build": "npx prisma generate --schema server/prisma/schema.prisma && npm run -w web build",
+    "start": "npm run -w server start",
+    "typecheck": "npm run -w server typecheck && npm run -w web typecheck",
+    "test": "npm run -w server test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  }
+}
