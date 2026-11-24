@@ -504,17 +504,23 @@ async function request<T>(path: string, options: RequestOptions = {}, retry = tr
 }
 
 const apiCache = new Map<string, { data: any; timestamp: number }>();
+const inFlightGets = new Map<string, Promise<any>>();
+const trackedStorageKeys = new Set<string>();
 const CACHE_TTL_MS = 60_000; // 60 seconds instant cache
+const REVALIDATE_AFTER_MS = 5_000;
 const STORAGE_CACHE_PREFIX = 'tms_swr_';
+let storageSynced = false;
 
 function getCachedEntry(path: string): { data: any; timestamp: number } | null {
   const inMem = apiCache.get(path);
   if (inMem) return inMem;
   try {
-    const raw = localStorage.getItem(`${STORAGE_CACHE_PREFIX}${path}`);
+    const storageKey = `${STORAGE_CACHE_PREFIX}${path}`;
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw);
       apiCache.set(path, parsed);
+      trackedStorageKeys.add(storageKey);
       return parsed;
     }
   } catch {
@@ -532,7 +538,9 @@ function setCachedEntry(path: string, data: any) {
   const entry = { data, timestamp: Date.now() };
   apiCache.set(path, entry);
   try {
-    localStorage.setItem(`${STORAGE_CACHE_PREFIX}${path}`, JSON.stringify(entry));
+    const storageKey = `${STORAGE_CACHE_PREFIX}${path}`;
+    trackedStorageKeys.add(storageKey);
+    localStorage.setItem(storageKey, JSON.stringify(entry));
   } catch {
     /* ignore */
   }
@@ -540,32 +548,53 @@ function setCachedEntry(path: string, data: any) {
 
 function clearAllCache() {
   apiCache.clear();
+  inFlightGets.clear();
   try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const k = localStorage.key(i);
-      if (k?.startsWith(STORAGE_CACHE_PREFIX)) localStorage.removeItem(k);
+    for (const key of trackedStorageKeys) {
+      localStorage.removeItem(key);
+    }
+    trackedStorageKeys.clear();
+    if (!storageSynced) {
+      storageSynced = true;
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k?.startsWith(STORAGE_CACHE_PREFIX)) localStorage.removeItem(k);
+      }
     }
   } catch {
     /* ignore */
   }
 }
 
+function fetchAndCache<T>(path: string): Promise<T> {
+  const existing = inFlightGets.get(path) as Promise<T> | undefined;
+  if (existing) return existing;
+
+  const promise = request<T>(path)
+    .then((fresh) => {
+      setCachedEntry(path, fresh);
+      return fresh;
+    })
+    .finally(() => {
+      inFlightGets.delete(path);
+    });
+
+  inFlightGets.set(path, promise);
+  return promise;
+}
+
 export const api = {
-  get: async <T>(path: string, signal?: AbortSignal): Promise<T> => {
+  get: async <T>(path: string, _signal?: AbortSignal): Promise<T> => {
     const cached = getCachedEntry(path);
     const now = Date.now();
     if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-      if (now - cached.timestamp > 2_000) {
-        // Revalidate in the background
-        request<T>(path, { signal })
-          .then((fresh) => setCachedEntry(path, fresh))
-          .catch(() => {});
+      if (now - cached.timestamp > REVALIDATE_AFTER_MS) {
+        // Deduplicated background revalidation
+        void fetchAndCache<T>(path).catch(() => {});
       }
       return cached.data as T;
     }
-    const data = await request<T>(path, { signal });
-    setCachedEntry(path, data);
-    return data;
+    return fetchAndCache<T>(path);
   },
   post: async <T>(path: string, body?: unknown): Promise<T> => {
     clearAllCache();

@@ -1,35 +1,37 @@
+import { Suspense, lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Spinner } from './components/ui';
 import { useAuth } from './lib/auth';
 import Login from './pages/Login';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
-import EmployeeDashboard from './pages/employee/Dashboard';
-import MyTasks from './pages/employee/MyTasks';
-import TaskDetail from './pages/shared/TaskDetail';
-import SodPage from './pages/employee/Sod';
-import EodPage from './pages/employee/Eod';
-import AttendancePage from './pages/employee/Attendance';
-import LeavePage from './pages/employee/Leave';
-import ProfilePage from './pages/employee/Profile';
-import AdminDashboard from './pages/admin/Dashboard';
-import Employees from './pages/admin/Employees';
-import EmployeeDetail from './pages/admin/EmployeeDetail';
-import AdminTasks from './pages/admin/Tasks';
-import ReviewQueue from './pages/admin/ReviewQueue';
-import SodEodMonitor from './pages/admin/SodEodMonitor';
-import AdminAttendance from './pages/admin/Attendance';
-import AdminLeave from './pages/admin/Leave';
-import Reports from './pages/admin/Reports';
-import Settings from './pages/admin/Settings';
-import OrgChart from './pages/admin/OrgChart';
-import Activity from './pages/admin/Activity';
-import AssignSod from './pages/admin/AssignSod';
-import Projects from './pages/shared/Projects';
-import ProjectDetail from './pages/shared/ProjectDetail';
-import AccessGrants from './pages/admin/AccessGrants';
-import OrgHierarchy from './pages/admin/OrgHierarchy';
+
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+const EmployeeDashboard = lazy(() => import('./pages/employee/Dashboard'));
+const MyTasks = lazy(() => import('./pages/employee/MyTasks'));
+const TaskDetail = lazy(() => import('./pages/shared/TaskDetail'));
+const SodPage = lazy(() => import('./pages/employee/Sod'));
+const EodPage = lazy(() => import('./pages/employee/Eod'));
+const AttendancePage = lazy(() => import('./pages/employee/Attendance'));
+const LeavePage = lazy(() => import('./pages/employee/Leave'));
+const ProfilePage = lazy(() => import('./pages/employee/Profile'));
+const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
+const Employees = lazy(() => import('./pages/admin/Employees'));
+const EmployeeDetail = lazy(() => import('./pages/admin/EmployeeDetail'));
+const AdminTasks = lazy(() => import('./pages/admin/Tasks'));
+const ReviewQueue = lazy(() => import('./pages/admin/ReviewQueue'));
+const SodEodMonitor = lazy(() => import('./pages/admin/SodEodMonitor'));
+const AdminAttendance = lazy(() => import('./pages/admin/Attendance'));
+const AdminLeave = lazy(() => import('./pages/admin/Leave'));
+const Reports = lazy(() => import('./pages/admin/Reports'));
+const Settings = lazy(() => import('./pages/admin/Settings'));
+const OrgChart = lazy(() => import('./pages/admin/OrgChart'));
+const Activity = lazy(() => import('./pages/admin/Activity'));
+const AssignSod = lazy(() => import('./pages/admin/AssignSod'));
+const Projects = lazy(() => import('./pages/shared/Projects'));
+const ProjectDetail = lazy(() => import('./pages/shared/ProjectDetail'));
+const AccessGrants = lazy(() => import('./pages/admin/AccessGrants'));
+const OrgHierarchy = lazy(() => import('./pages/admin/OrgHierarchy'));
 
 function RequirePermission({
   permissions,
@@ -63,19 +65,28 @@ export default function App() {
     );
   }
 
+  const pageFallback = (
+    <div className="flex min-h-[240px] items-center justify-center">
+      <Spinner label="Loading…" />
+    </div>
+  );
+
   if (!user) {
     return (
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <Suspense fallback={pageFallback}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </Suspense>
     );
   }
 
   return (
-    <Routes>
+    <Suspense fallback={pageFallback}>
+      <Routes>
       <Route path="/login" element={<Navigate to={user?.role?.portal === 'ADMIN' ? '/admin' : '/'} replace />} />
       <Route path="/forgot-password" element={<Navigate to="/" replace />} />
       <Route path="/reset-password" element={<Navigate to="/" replace />} />
@@ -202,6 +213,7 @@ export default function App() {
         />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </Suspense>
   );
 }

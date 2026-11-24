@@ -76,7 +76,7 @@ export async function supervisorsOf(userId: string): Promise<string[]> {
     where: { id: userId },
     select: {
       managerId: true,
-      departmentId: true,
+      department: { select: { headId: true } },
       teamMemberships: { select: { team: { select: { leaderId: true } } } },
     },
   });
@@ -87,13 +87,7 @@ export async function supervisorsOf(userId: string): Promise<string[]> {
   user.teamMemberships.forEach((m) => {
     if (m.team.leaderId) ids.add(m.team.leaderId);
   });
-  if (user.departmentId) {
-    const dept = await prisma.department.findUnique({
-      where: { id: user.departmentId },
-      select: { headId: true },
-    });
-    if (dept?.headId) ids.add(dept.headId);
-  }
+  if (user.department?.headId) ids.add(user.department.headId);
   ids.delete(userId);
   return [...ids];
 }

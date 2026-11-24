@@ -77,8 +77,10 @@ sessionsRouter.get(
   requirePermission('session.read.own'),
   handler(async (req, res) => {
     const user = currentUser(req);
-    const scopeWhere = await userScopeFilter(user, 'session.read');
-    const settings = await getSettings();
+    const [scopeWhere, settings] = await Promise.all([
+      userScopeFilter(user, 'session.read'),
+      getSettings(),
+    ]);
 
     const sessions = await prisma.userSession.findMany({
       where: { ...scopeWhere, isActive: true },

@@ -20,8 +20,7 @@ attendanceRouter.get(
   '/today',
   handler(async (req, res) => {
     const user = currentUser(req);
-    const record = await todayAttendance(user.id);
-    const settings = await getSettings();
+    const [record, settings] = await Promise.all([todayAttendance(user.id), getSettings()]);
     res.json({
       data: record,
       today: todayInTz(settings.timezone),
