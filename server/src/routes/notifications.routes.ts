@@ -9,6 +9,35 @@ import { notifyMany } from '../services/notification.service';
 export const notificationsRouter = Router();
 notificationsRouter.use(authenticate);
 
+const NOTIF_CACHE_TTL_MS = 3000;
+const notifCache = new Map<string, { expiresAt: number; payload: unknown }>();
+
+function getCachedNotif<T>(key: string): T | null {
+  const entry = notifCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    notifCache.delete(key);
+    return null;
+  }
+  return entry.payload as T;
+}
+
+function setCachedNotif(key: string, payload: unknown): void {
+  if (notifCache.size >= 300) {
+    const oldest = notifCache.keys().next().value;
+    if (oldest) notifCache.delete(oldest);
+  }
+  notifCache.set(key, { expiresAt: Date.now() + NOTIF_CACHE_TTL_MS, payload });
+}
+
+function invalidateUserNotifCache(userId: string): void {
+  for (const key of notifCache.keys()) {
+    if (key.startsWith(`${userId}:`)) {
+      notifCache.delete(key);
+    }
+  }
+}
+
 notificationsRouter.get(
   '/',
   handler(async (req, res) => {
@@ -22,18 +51,41 @@ notificationsRouter.get(
       req.query,
     );
 
+    const cacheKey = `${user.id}:${q.page}:${q.pageSize}:${q.unreadOnly ? '1' : '0'}`;
+    const cached = getCachedNotif(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     const where = { userId: user.id, ...(q.unreadOnly ? { isRead: false } : {}) };
     const [rows, total, unread] = await Promise.all([
       prisma.notification.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         ...skipTake(q.page, q.pageSize),
+        select: {
+          id: true,
+          type: true,
+          title: true,
+          body: true,
+          link: true,
+          isRead: true,
+          readAt: true,
+          createdAt: true,
+        },
       }),
       prisma.notification.count({ where }),
-      prisma.notification.count({ where: { userId: user.id, isRead: false } }),
+      q.unreadOnly ? prisma.notification.count({ where: { userId: user.id, isRead: false } }) : Promise.resolve(-1),
     ]);
 
-    res.json({ ...paginated(rows, total, q.page, q.pageSize), unread });
+    const payload = {
+      ...paginated(rows, total, q.page, q.pageSize),
+      unread: unread >= 0 ? unread : total,
+    };
+
+    setCachedNotif(cacheKey, payload);
+    res.json(payload);
   }),
 );
 
@@ -41,7 +93,16 @@ notificationsRouter.get(
   '/unread-count',
   handler(async (req, res) => {
     const user = currentUser(req);
-    res.json({ count: await prisma.notification.count({ where: { userId: user.id, isRead: false } }) });
+    const cacheKey = `${user.id}:unread`;
+    const cached = getCachedNotif<{ count: number }>(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+    const count = await prisma.notification.count({ where: { userId: user.id, isRead: false } });
+    const payload = { count };
+    setCachedNotif(cacheKey, payload);
+    res.json(payload);
   }),
 );
 
@@ -53,6 +114,7 @@ notificationsRouter.post(
       where: { id: req.params.id, userId: user.id },
       data: { isRead: true, readAt: new Date() },
     });
+    invalidateUserNotifCache(user.id);
     res.json({ ok: true });
   }),
 );
@@ -65,6 +127,7 @@ notificationsRouter.post(
       where: { userId: user.id, isRead: false },
       data: { isRead: true, readAt: new Date() },
     });
+    invalidateUserNotifCache(user.id);
     res.json({ ok: true });
   }),
 );
@@ -103,6 +166,10 @@ notificationsRouter.post(
       recipients.map((r) => r.id),
       { type: 'ANNOUNCEMENT', title: body.title, body: body.body, email: body.email },
     );
+
+    for (const r of recipients) {
+      invalidateUserNotifCache(r.id);
+    }
 
     res.json({ ok: true, sent: recipients.length });
   }),

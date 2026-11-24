@@ -15,14 +15,46 @@ import {
 } from '../auth/tokens';
 import { authenticate, currentUser } from '../auth/middleware';
 import { loadAuthUser } from '../auth/rbac';
-import { getUserDto, USER_INCLUDE, toUserDto } from '../services/user.service';
+import { getUserDto } from '../services/user.service';
 import { audit, clientIp } from '../services/audit.service';
 import { describeClient, endAllSessions, endSession, startSession } from '../services/session.service';
 import { getSettings } from '../services/settings.service';
-import { flushOutbox, queueEmail, renderEmail, renderPasswordResetEmail } from '../services/mailer.service';
+import { flushOutbox, queueEmail, renderPasswordResetEmail } from '../services/mailer.service';
 import { env } from '../env';
 
 export const authRouter = Router();
+
+const ME_CACHE_TTL_MS = 5000;
+const SETTINGS_CACHE_TTL_MS = 15000;
+const meCache = new Map<string, { expiresAt: number; payload: unknown }>();
+let settingsCache: { expiresAt: number; value: Awaited<ReturnType<typeof getSettings>> } | null = null;
+
+async function getCachedSettings() {
+  if (settingsCache && Date.now() < settingsCache.expiresAt) {
+    return settingsCache.value;
+  }
+  const value = await getSettings();
+  settingsCache = { expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS, value };
+  return value;
+}
+
+function getCachedMe(userId: string) {
+  const hit = meCache.get(userId);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    meCache.delete(userId);
+    return null;
+  }
+  return hit.payload;
+}
+
+function setCachedMe(userId: string, payload: unknown) {
+  if (meCache.size >= 300) {
+    const oldest = meCache.keys().next().value;
+    if (oldest) meCache.delete(oldest);
+  }
+  meCache.set(userId, { expiresAt: Date.now() + ME_CACHE_TTL_MS, payload });
+}
 
 function getRealIp(req: Request): string {
   const vercelIp = req.headers['x-vercel-forwarded-for'];
@@ -79,8 +111,6 @@ const positionSchema = z.object({
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
-  // Optional: only sent by clients that already hold location consent, and
-  // stored only if company policy and the employee's consent both allow it.
   position: positionSchema.optional(),
 });
 
@@ -108,29 +138,26 @@ authRouter.post(
   handler(async (req, res) => {
     const body = parse(loginSchema, req.body);
     const email = body.email.toLowerCase().trim();
-    console.log(`[auth.login] Received login request for ${email}`);
 
     const user = await prisma.user.findUnique({
       where: { email },
-      include: USER_INCLUDE,
+      include: {
+        role: true,
+        department: true,
+        position: true,
+      },
     });
 
     if (!user) {
-      console.warn(`[auth.login] Authentication failed: user not found (${email})`);
       throw unauthorized('Invalid email or password');
     }
 
     const isValid = await verifyPassword(body.password, user.passwordHash);
-
     if (!isValid) {
-      console.warn(`[auth.login] Authentication failed: invalid password for ${email}`);
       throw unauthorized('Invalid email or password');
     }
 
     if (user.status !== 'ACTIVE') {
-      console.warn(
-        `[auth.login] Access denied: account inactive for ${email} (status: ${user.status}, role: ${user.role.key})`,
-      );
       throw forbidden('This account is currently inactive. Please contact your administrator.');
     }
 
@@ -141,8 +168,7 @@ authRouter.post(
         { ip: clientIp(req), userAgent: req.headers['user-agent'] },
         body.position,
       );
-    } catch (sessionErr: any) {
-      console.warn('[auth.login] Failed to record session, generating fallback sessionId:', sessionErr?.message);
+    } catch {
       sessionId = 'sess_' + Math.random().toString(36).slice(2, 10);
     }
 
@@ -156,10 +182,11 @@ authRouter.post(
     const ip = clientIp(req);
     const userAgent = req.headers['user-agent'];
 
-    const [refreshToken, auth, settings] = await Promise.all([
+    const [refreshToken, auth, settings, freshUser] = await Promise.all([
       issueRefreshToken(user.id, { userAgent, ip, sessionId }),
       loadAuthUser(user.id),
-      getSettings().catch(() => ({ locationTrackingEnabled: false, locationConsentVersion: '1.0' })),
+      getCachedSettings().catch(() => ({ locationTrackingEnabled: false, locationConsentVersion: '1.0' })),
+      getUserDto(user.id),
       prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }).catch(() => undefined),
       audit({
         actorId: user.id,
@@ -171,17 +198,12 @@ authRouter.post(
       }).catch(() => undefined),
     ]);
 
-    console.log(
-      `[auth.login] Successful authentication for ${user.email} (role: ${user.role.key}, sessionId: ${sessionId})`,
-    );
-
     res.json({
       accessToken,
       refreshToken,
       sessionId,
-      user: toUserDto(user),
+      user: freshUser,
       permissions: [...(auth?.permissions ?? [])],
-      // Drives the consent prompt in the client.
       privacy: {
         locationTrackingEnabled: settings.locationTrackingEnabled,
         consentVersion: settings.locationConsentVersion,
@@ -202,24 +224,19 @@ authRouter.post(
   handler(async (req, res) => {
     const body = parse(forgotPasswordSchema, req.body);
     const email = body.email.toLowerCase().trim();
-    console.log(`[auth.forgot-password] Password reset requested for ${email}`);
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await prisma.user.findUnique({ where: { email } });
 
     let emailSent = false;
     let emailStatus: 'SENT' | 'QUEUED' | 'NOT_CONFIGURED' = 'NOT_CONFIGURED';
 
     if (user && user.status === 'ACTIVE') {
-      // Invalidate any existing unused reset tokens for this user
       await prisma.passwordResetToken.updateMany({
         where: { userId: user.id, usedAt: null },
         data: { usedAt: new Date() },
       });
 
       const { token, hash } = generatePasswordResetToken();
-      // Token expires in 20 minutes
       const expiresAt = new Date(Date.now() + 20 * 60 * 1000);
 
       await prisma.passwordResetToken.create({
@@ -251,10 +268,8 @@ authRouter.post(
         const flushResult = await flushOutbox();
         emailSent = flushResult.sent > 0;
         emailStatus = emailSent ? 'SENT' : 'QUEUED';
-        console.log(`[auth.forgot-password] Email dispatched via ${env.resendApiKey ? 'Resend' : 'SMTP'} for ${user.email}`);
       } else {
         emailStatus = 'NOT_CONFIGURED';
-        console.warn(`[auth.forgot-password] Neither SMTP nor Resend configured. Email queued in outbox.`);
       }
 
       await audit({
@@ -264,11 +279,8 @@ authRouter.post(
         entityId: user.id,
         ip: clientIp(req),
       });
-    } else {
-      console.log(`[auth.forgot-password] No active user found for email ${email} — generic response returned`);
     }
 
-    // Always return generic response to prevent user enumeration
     res.json({
       ok: true,
       message: 'If an account exists with that email, a password reset link has been sent.',
@@ -354,7 +366,6 @@ authRouter.post(
 
     const newPasswordHash = await hashPassword(body.newPassword);
 
-    // Update password, mark token as used, and invalidate other pending tokens for this user
     await prisma.$transaction([
       prisma.user.update({
         where: { id: record.userId },
@@ -370,9 +381,9 @@ authRouter.post(
       }),
     ]);
 
-    // Invalidate all existing sessions and refresh tokens on password reset
     await endAllSessions(record.userId, 'PASSWORD_RESET');
     await revokeAllRefreshTokens(record.userId);
+    meCache.delete(record.userId);
 
     await audit({
       actorId: record.userId,
@@ -381,8 +392,6 @@ authRouter.post(
       entityId: record.userId,
       ip: clientIp(req),
     });
-
-    console.log(`[auth.reset-password] Password successfully reset for user ${record.user.email}`);
 
     res.json({
       ok: true,
@@ -422,7 +431,6 @@ authRouter.post(
       res.json({ accessToken, refreshToken });
     } catch (err: any) {
       if (err instanceof AppError) throw err;
-      console.warn('[auth.refresh] Token refresh rejected:', err?.message || err);
       throw unauthorized('Refresh token is no longer valid');
     }
   }),
@@ -442,6 +450,8 @@ authRouter.post(
       await endSession(user.sessionId, 'LOGOUT');
     }
 
+    meCache.delete(user.id);
+
     await audit({
       actorId: user.id,
       action: 'auth.logout',
@@ -459,8 +469,14 @@ authRouter.get(
   authenticate,
   handler(async (req, res) => {
     const auth = currentUser(req);
-    const [user, settings] = await Promise.all([getUserDto(auth.id), getSettings()]);
-    res.json({
+    const cached = getCachedMe(auth.id);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const [user, settings] = await Promise.all([getUserDto(auth.id), getCachedSettings()]);
+    const payload = {
       user,
       permissions: [...auth.permissions],
       sessionId: auth.sessionId ?? null,
@@ -470,7 +486,10 @@ authRouter.get(
         consentGiven:
           !!auth.locationConsentAt && auth.locationConsentVersion === settings.locationConsentVersion,
       },
-    });
+    };
+
+    setCachedMe(auth.id, payload);
+    res.json(payload);
   }),
 );
 
@@ -495,6 +514,7 @@ authRouter.patch(
       where: { id: auth.id },
       data: { email: newEmail },
     });
+    meCache.delete(auth.id);
 
     await audit({
       actorId: auth.id,
@@ -505,7 +525,6 @@ authRouter.patch(
       meta: { oldEmail: auth.email, newEmail: updated.email },
     });
 
-    console.log(`[auth.profile] Updated email for user ${auth.id}: ${auth.email} -> ${updated.email}`);
     res.json({ ok: true, email: updated.email });
   }),
 );
@@ -531,18 +550,14 @@ authRouter.post(
       where: { id: auth.id },
       data: { passwordHash: await hashPassword(body.newPassword), mustChangePassword: false },
     });
-    // Force every other device to re-authenticate with the new credentials.
     await endAllSessions(auth.id, 'PASSWORD_CHANGE');
     await revokeAllRefreshTokens(auth.id);
+    meCache.delete(auth.id);
     await audit({ actorId: auth.id, action: 'auth.password_changed', entity: 'User', entityId: auth.id });
 
     res.json({ ok: true });
   }),
 );
-
-// ---------------------------------------------------------------------------
-// Privacy notice & location consent
-// ---------------------------------------------------------------------------
 
 const PRIVACY_NOTICE = [
   'Your location is recorded only at the moment you check in or check out, and only if you accept below.',
@@ -556,7 +571,7 @@ authRouter.get(
   authenticate,
   handler(async (req, res) => {
     const auth = currentUser(req);
-    const settings = await getSettings();
+    const settings = await getCachedSettings();
     res.json({
       enabled: settings.locationTrackingEnabled,
       version: settings.locationConsentVersion,
@@ -576,21 +591,20 @@ authRouter.post(
   handler(async (req, res) => {
     const auth = currentUser(req);
     const body = parse(z.object({ accepted: z.boolean() }), req.body);
-    const settings = await getSettings();
+    const settings = await getCachedSettings();
 
     await prisma.user.update({
       where: { id: auth.id },
       data: body.accepted
         ? {
-            locationConsentAt: new Date(),
-            locationConsentVersion: settings.locationConsentVersion,
-            locationConsentIp: clientIp(req),
-          }
+          locationConsentAt: new Date(),
+          locationConsentVersion: settings.locationConsentVersion,
+          locationConsentIp: clientIp(req),
+        }
         : { locationConsentAt: null, locationConsentVersion: null, locationConsentIp: null },
     });
+    meCache.delete(auth.id);
 
-    // Withdrawing consent erases what was already collected — consent is the
-    // only lawful basis this system claims for holding it.
     if (!body.accepted) {
       await prisma.attendance.updateMany({
         where: { userId: auth.id },

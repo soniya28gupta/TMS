@@ -2,11 +2,34 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { handler, parse } from '../lib/http';
-import { forbidden, notFound } from '../lib/errors';
+import { forbidden } from '../lib/errors';
 import { authenticate, currentUser } from '../auth/middleware';
 
 export const grantsRouter = Router();
 grantsRouter.use(authenticate);
+
+const GRANTS_CACHE_TTL_MS = 5000;
+let grantsCache: { expiresAt: number; payload: unknown } | null = null;
+
+function getCachedGrants<T>(): T | null {
+  if (!grantsCache) return null;
+  if (Date.now() > grantsCache.expiresAt) {
+    grantsCache = null;
+    return null;
+  }
+  return grantsCache.payload as T;
+}
+
+function setCachedGrants(payload: unknown): void {
+  grantsCache = {
+    expiresAt: Date.now() + GRANTS_CACHE_TTL_MS,
+    payload,
+  };
+}
+
+function invalidateGrantsCache(): void {
+  grantsCache = null;
+}
 
 const createGrantSchema = z.object({
   granteeId: z.string(),
@@ -26,15 +49,29 @@ grantsRouter.get(
       throw forbidden('Only admins or managers can view access grants');
     }
 
+    const cached = getCachedGrants();
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     const grants = await prisma.userAccessGrant.findMany({
       orderBy: { createdAt: 'desc' },
-      include: {
+      select: {
+        id: true,
+        grantorId: true,
+        granteeId: true,
+        targetUserId: true,
+        reason: true,
+        expiresAt: true,
+        createdAt: true,
         grantor: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
         grantee: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
         targetUser: { select: { id: true, firstName: true, lastName: true, employeeCode: true, designation: true } },
       },
     });
 
+    setCachedGrants(grants);
     res.json(grants);
   }),
 );
@@ -71,12 +108,20 @@ grantsRouter.post(
         reason: body.reason ?? 'Admin delegated view access updated',
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
       },
-      include: {
-        grantee: true,
-        targetUser: true,
+      select: {
+        id: true,
+        grantorId: true,
+        granteeId: true,
+        targetUserId: true,
+        reason: true,
+        expiresAt: true,
+        createdAt: true,
+        grantee: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
+        targetUser: { select: { id: true, firstName: true, lastName: true, employeeCode: true, designation: true } },
       },
     });
 
+    invalidateGrantsCache();
     res.status(201).json(grant);
   }),
 );
@@ -94,6 +139,7 @@ grantsRouter.delete(
 
     const { id } = req.params;
     await prisma.userAccessGrant.delete({ where: { id } });
+    invalidateGrantsCache();
     res.status(204).end();
   }),
 );
