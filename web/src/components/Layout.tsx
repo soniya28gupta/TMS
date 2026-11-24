@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api, tokens } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -18,6 +18,7 @@ export function Layout() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
+  const inFlightNotifRef = useRef<Promise<void> | null>(null);
 
   // Change Password Modal State
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
@@ -61,23 +62,36 @@ export function Layout() {
     }
   };
 
-  const loadNotifications = async () => {
+  const loadNotifications = useCallback(async () => {
     if (!tokens.access && !tokens.refresh) return;
-    try {
-      const res = await api.get<{ data: Notification[]; unread: number }>('/notifications?pageSize=12');
-      setNotifications(res.data);
-      setUnread(res.unread);
-    } catch {
-      /* the bell is not worth an error banner */
+    if (inFlightNotifRef.current) {
+      return inFlightNotifRef.current;
     }
-  };
+
+    const requestPromise = (async () => {
+      try {
+        const res = await api.get<{ data: Notification[]; unread: number }>('/notifications?pageSize=12');
+        setNotifications(res.data);
+        setUnread(res.unread);
+      } catch {
+        /* the bell is not worth an error banner */
+      } finally {
+        inFlightNotifRef.current = null;
+      }
+    })();
+
+    inFlightNotifRef.current = requestPromise;
+    return requestPromise;
+  }, []);
 
   useEffect(() => {
-    if (!user || (!tokens.access && !tokens.refresh)) return;
+    if (!user?.id || (!tokens.access && !tokens.refresh)) return;
     void loadNotifications();
-    const timer = setInterval(loadNotifications, 60_000);
+    const timer = setInterval(() => {
+      void loadNotifications();
+    }, 60_000);
     return () => clearInterval(timer);
-  }, [user]);
+  }, [user?.id, loadNotifications]);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -307,7 +321,8 @@ export function Layout() {
                       className="text-xs font-medium text-brand-600 hover:underline"
                       onClick={async () => {
                         await api.post('/notifications/read-all');
-                        void loadNotifications();
+                        setUnread(0);
+                        setNotifications((list) => list.map((n) => ({ ...n, isRead: true })));
                       }}
                     >
                       Mark all read
