@@ -14,13 +14,14 @@ import {
   Spinner,
   Table,
 } from '../../components/ui';
-import { api } from '../../lib/api';
+import { api, getCachedData } from '../../lib/api';
 import { formatDate } from '../../lib/format';
 import type { User, UserAccessGrant } from '../../lib/types';
 
 export default function AccessGrants() {
-  const [grants, setGrants] = useState<UserAccessGrant[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initialGrants = getCachedData<UserAccessGrant[]>('/grants');
+  const [grants, setGrants] = useState<UserAccessGrant[]>(initialGrants ?? []);
+  const [loading, setLoading] = useState(!initialGrants);
   const [error, setError] = useState<string | null>(null);
 
   // Grant Modal
@@ -32,9 +33,9 @@ export default function AccessGrants() {
   const [expiresAt, setExpiresAt] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const loadGrants = async () => {
+  const loadGrants = async (showSpinner = !grants.length) => {
     try {
-      setLoading(true);
+      if (showSpinner) setLoading(true);
       const res = await api.get<UserAccessGrant[]>('/grants');
       setGrants(res || []);
     } catch (err: any) {
@@ -45,10 +46,11 @@ export default function AccessGrants() {
   };
 
   useEffect(() => {
-    loadGrants();
+    void loadGrants(!initialGrants);
   }, []);
 
   useEffect(() => {
+    if (!createOpen || employees.length > 0) return;
     async function loadEmployees() {
       try {
         const res = await api.get<{ data: User[] }>('/employees?pageSize=100');

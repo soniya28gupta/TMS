@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, isTokenExpired, refreshSession, tokens } from './api';
+import { api, isTokenExpired, primeApiCache, refreshSession, tokens } from './api';
 import type { User } from './types';
 
 /**
@@ -87,11 +87,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     try {
       const data = await api.get<{ user: User; permissions: string[] }>('/auth/me');
-      setUser(data.user);
-      setPermissions(new Set(data.permissions));
+      const nextUserJson = JSON.stringify(data.user);
+      const nextPermsJson = JSON.stringify(data.permissions);
+      const prevUserJson = localStorage.getItem(CACHED_USER_KEY);
+      const prevPermsJson = localStorage.getItem(CACHED_PERMS_KEY);
+
+      if (nextUserJson !== prevUserJson) {
+        setUser(data.user);
+      }
+      if (nextPermsJson !== prevPermsJson) {
+        setPermissions(new Set(data.permissions));
+      }
       try {
-        localStorage.setItem(CACHED_USER_KEY, JSON.stringify(data.user));
-        localStorage.setItem(CACHED_PERMS_KEY, JSON.stringify(data.permissions));
+        localStorage.setItem(CACHED_USER_KEY, nextUserJson);
+        localStorage.setItem(CACHED_PERMS_KEY, nextPermsJson);
       } catch {
         /* storage may be full or disabled */
       }
@@ -122,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const data = await api.post<LoginResponse>('/auth/login', { email, password });
     tokens.set(data.accessToken, data.refreshToken);
+    primeApiCache('/auth/me', { user: data.user, permissions: data.permissions });
     try {
       localStorage.setItem(CACHED_USER_KEY, JSON.stringify(data.user));
       localStorage.setItem(CACHED_PERMS_KEY, JSON.stringify(data.permissions));

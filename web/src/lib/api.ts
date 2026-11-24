@@ -245,6 +245,10 @@ export function getCachedData<T>(path: string): T | null {
   return cached ? (cached.data as T) : null;
 }
 
+export function primeApiCache(path: string, data: unknown): void {
+  setCachedEntry(path, data);
+}
+
 function setCachedEntry(path: string, data: unknown) {
   const entry = { data, timestamp: Date.now() };
   apiCache.set(path, entry);

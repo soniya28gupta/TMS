@@ -14,14 +14,16 @@ import {
   StatTile,
   Table,
 } from '../../components/ui';
-import { api } from '../../lib/api';
+import { api, getCachedData } from '../../lib/api';
 import { formatDate, formatTime } from '../../lib/format';
 import type { AdminDashboard as AdminDashboardType, HierarchyRosterMember, Task } from '../../lib/types';
 
 export default function AdminDashboard() {
-  const [data, setData] = useState<AdminDashboardType | null>(null);
-  const [tasksInReview, setTasksInReview] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedDash = getCachedData<AdminDashboardType>('/dashboard/admin');
+  const cachedReview = getCachedData<{ data: Task[] }>('/tasks?status=SUBMITTED_FOR_REVIEW&pageSize=5');
+  const [data, setData] = useState<AdminDashboardType | null>(cachedDash);
+  const [tasksInReview, setTasksInReview] = useState<Task[]>(cachedReview?.data ?? []);
+  const [loading, setLoading] = useState(!cachedDash);
   const [error, setError] = useState<string | null>(null);
 
   // Hierarchy Roster Filter State
@@ -30,22 +32,28 @@ export default function AdminDashboard() {
   const [selectedStatus, setSelectedStatus] = useState('');
 
   useEffect(() => {
+    let active = true;
     async function load() {
       try {
-        setLoading(true);
+        if (!cachedDash) setLoading(true);
         const [dashRes, reviewRes] = await Promise.all([
           api.get<AdminDashboardType>('/dashboard/admin'),
           api.get<{ data: Task[] }>('/tasks?status=SUBMITTED_FOR_REVIEW&pageSize=5'),
         ]);
+        if (!active) return;
         setData(dashRes);
         setTasksInReview(reviewRes.data || []);
       } catch (err: any) {
+        if (!active) return;
         setError(err.message || 'Failed to load executive dashboard');
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
-    load();
+    void load();
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (loading) return <Spinner label="Loading Founder Executive statistics & hierarchy…" />;

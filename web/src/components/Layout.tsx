@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { api, tokens } from '../lib/api';
+import { api, getCachedData, tokens } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { relativeTime } from '../lib/format';
 import type { Notification } from '../lib/types';
@@ -15,9 +15,10 @@ export function Layout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const initialNotifs = getCachedData<{ data: Notification[]; unread: number }>('/notifications?pageSize=12');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unread, setUnread] = useState(0);
+  const [notifications, setNotifications] = useState<Notification[]>(initialNotifs?.data ?? []);
+  const [unread, setUnread] = useState(initialNotifs?.unread ?? 0);
   const inFlightNotifRef = useRef<Promise<void> | null>(null);
 
   // Change Password Modal State
