@@ -213,7 +213,6 @@ dashboardRouter.get(
     const scopedUser = { userId: { in: userIds } };
 
     const [
-      totalEmployees,
       newEmployees,
       attendanceGroups,
       taskGroups,
@@ -224,7 +223,6 @@ dashboardRouter.get(
       pendingLeave,
       reviewQueue,
     ] = await Promise.all([
-      prisma.user.count({ where: peopleWhere }),
       prisma.user.count({
         where: { ...peopleWhere, dateOfJoining: { gte: new Date(`${addDays(q.date, -30)}T00:00:00.000Z`) } },
       }),
@@ -265,6 +263,7 @@ dashboardRouter.get(
       }),
     ]);
 
+    const totalEmployees = people.length;
     const att = Object.fromEntries(attendanceGroups.map((g) => [g.status, g._count._all]));
     const tasks = Object.fromEntries(taskGroups.map((g) => [g.status, g._count._all]));
     const sod = Object.fromEntries(sodGroups.map((g) => [g.status, g._count._all]));

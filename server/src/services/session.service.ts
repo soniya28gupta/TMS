@@ -1,6 +1,7 @@
 import { prisma } from '../db';
 import { getSettings } from './settings.service';
 import { resolvePosition, type RawPosition } from './geo.service';
+import { invalidateSessionCache } from '../auth/middleware';
 
 /**
  * Login/logout and session monitoring.
@@ -102,6 +103,7 @@ export async function endSession(sessionId: string, reason: string): Promise<voi
     data: { revokedAt: now },
   });
   lastTouch.delete(sessionId);
+  invalidateSessionCache(sessionId);
 }
 
 export async function endAllSessions(userId: string, reason: string): Promise<number> {

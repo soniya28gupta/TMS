@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "setup": "npm install && npm run db:setup",
+    "db:migrate:supabase": "npm run -w server db:migrate:supabase",
     "db:setup": "npm run -w server db:push && npm run -w server db:seed",
     "db:reset": "npm run -w server db:reset",
     "admin:set-email": "npm run -w server admin:set-email --",

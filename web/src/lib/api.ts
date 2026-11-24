@@ -1,8 +1,5 @@
-import * as demo from './demo-data';
-
 const ACCESS_KEY = 'tms.accessToken';
 const REFRESH_KEY = 'tms.refreshToken';
-const DEMO_USER_KEY = 'tms.demoUser';
 
 /**
  * Where the API lives.
@@ -16,31 +13,10 @@ const DEMO_USER_KEY = 'tms.demoUser';
 export const API_BASE = (import.meta.env?.VITE_API_URL ?? '/api').replace(/\/$/, '');
 
 /**
- * Standalone demo mode — canned data so the UI can be shown with no backend
- * (e.g. a static Vercel deploy of `web/` on its own).
- *
- * It is OPT-IN and must never engage when a real API exists, because a fallback
- * that silently answers failed requests turns a broken endpoint into one that
- * looks fine. That is exactly how the admin pages once shipped pointing at URLs
- * that did not exist.
- *
- * Enable with `VITE_DEMO_MODE=true` at build time, or at runtime for a quick
- * look via `localStorage.setItem('tms.demoMode', 'true')`.
+ * No demo mode fallback. All operations use the live database backend API.
  */
 export function isDemoMode(): boolean {
-  if (import.meta.env?.VITE_DEMO_MODE === 'true') return true;
-  if (typeof window !== 'undefined') {
-    // If hosted on Vercel without an explicit API host, automatically engage demo mode
-    // so visitors can explore all screens without database connection errors.
-    if (window.location.hostname.includes('vercel.app') && localStorage.getItem('tms.demoMode') !== 'false') {
-      return true;
-    }
-  }
-  try {
-    return localStorage.getItem('tms.demoMode') === 'true';
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 export class ApiError extends Error {
@@ -70,9 +46,11 @@ export const tokens = {
   clear() {
     localStorage.removeItem(ACCESS_KEY);
     localStorage.removeItem(REFRESH_KEY);
-    localStorage.removeItem(DEMO_USER_KEY);
+    localStorage.removeItem('tms.demoUser');
+    localStorage.removeItem('tms.demoMode');
     localStorage.removeItem('tms.cachedUser');
     localStorage.removeItem('tms.cachedPermissions');
+    clearAllCache();
     try {
       window.dispatchEvent(new Event('tms:logout'));
     } catch {
@@ -143,245 +121,6 @@ export async function refreshSession(): Promise<boolean> {
   return refreshing;
 }
 
-// ---------------------------------------------------------------------------
-// Standalone demo responses
-//
-// Only reached when isDemoMode() is true. Data lives in ./demo-data so this
-// file stays about transport. Writes are acknowledged but not stored — the
-// demo build has nowhere to store them.
-// ---------------------------------------------------------------------------
-
-function ok(data: unknown) {
-  return { data };
-}
-
-function page(items: unknown[]) {
-  return {
-    data: items,
-    meta: { page: 1, pageSize: items.length || 15, total: items.length, totalPages: 1 },
-  };
-}
-
-function handleMockFallback(path: string, options: RequestOptions): any {
-  const method = (options.method ?? 'GET').toUpperCase();
-  const body =
-    options.body && typeof options.body !== 'string'
-      ? (options.body as Record<string, any>)
-      : options.body
-        ? JSON.parse(options.body as string)
-        : {};
-  const route = path.split('?')[0];
-
-  // --- auth ---------------------------------------------------------------
-  if (route === '/auth/login' && method === 'POST') {
-    const profile = demo.byEmail(String(body.email ?? '').toLowerCase().trim());
-    // Behave like the real endpoint rather than waving everyone through.
-    if (!profile || body.password !== 'Password@123') {
-      throw new ApiError(401, 'UNAUTHORIZED', 'Invalid email or password');
-    }
-    tokens.set('demo_access_token', 'demo_refresh_token');
-    localStorage.setItem(DEMO_USER_KEY, profile.email);
-    return {
-      accessToken: 'demo_access_token',
-      refreshToken: 'demo_refresh_token',
-      sessionId: 'demo_session',
-      user: profile,
-      permissions: demo.PERMISSIONS_BY_ROLE[profile.role.key] ?? [],
-      privacy: { locationTrackingEnabled: false, consentVersion: '1.0', consentGiven: false },
-    };
-  }
-
-  const current =
-    demo.byEmail(localStorage.getItem(DEMO_USER_KEY) ?? '') ?? demo.byEmail('ananya@acme.test')!;
-
-  if (route === '/auth/me') {
-    return {
-      user: current,
-      permissions: demo.PERMISSIONS_BY_ROLE[current.role.key] ?? [],
-      sessionId: 'demo_session',
-      privacy: { locationTrackingEnabled: false, consentVersion: '1.0', consentGiven: false },
-    };
-  }
-  if (route === '/auth/forgot-password' && method === 'POST') {
-    return {
-      ok: true,
-      message: 'If an account exists with that email, a password reset link has been sent.',
-      emailConfigured: false,
-    };
-  }
-  if (route === '/auth/verify-reset-token' && method === 'GET') {
-    return { valid: true, email: 'admin@acme.test' };
-  }
-  if (route === '/auth/reset-password' && method === 'POST') {
-    return {
-      ok: true,
-      message: 'Your password has been reset successfully. You can now sign in with your new password.',
-    };
-  }
-  if (route === '/auth/logout') {
-    tokens.clear();
-    return { ok: true };
-  }
-  if (route === '/auth/privacy') {
-    return {
-      enabled: false,
-      version: '1.0',
-      precision: 'APPROXIMATE',
-      retentionDays: 90,
-      notice: ['Location capture is switched off in this demo.'],
-      consentGiven: false,
-      consentAt: null,
-    };
-  }
-  if (route === '/auth/sessions') return ok(demo.SESSIONS.slice(0, 3));
-
-  // --- dashboards ---------------------------------------------------------
-  if (route === '/dashboard/me') return demo.DASHBOARD_ME;
-  if (route === '/dashboard/admin') return demo.DASHBOARD_ADMIN;
-
-  // --- tasks --------------------------------------------------------------
-  if (route === '/tasks/review-queue') {
-    return ok(demo.TASKS.filter((t: any) => t.status === 'SUBMITTED_FOR_REVIEW'));
-  }
-  if (route === '/tasks/meta/options') {
-    return {
-      statuses: ['ASSIGNED', 'ACCEPTED', 'IN_PROGRESS', 'SUBMITTED_FOR_REVIEW', 'CHANGES_REQUIRED', 'BLOCKED', 'OVERDUE', 'COMPLETED', 'CANCELLED'],
-      priorities: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
-    };
-  }
-  if (/^\/tasks\/[^/]+$/.test(route) && method === 'GET') {
-    const task = demo.TASKS.find((t: any) => t.id === route.split('/')[2]) ?? demo.TASKS[0];
-    return ok({ ...task, comments: [], attachments: [], activities: [], subtasks: [] });
-  }
-  if (route === '/tasks') return page(demo.TASKS);
-
-  // --- employees & hierarchy ---------------------------------------------
-  if (route === '/employees/org-chart') {
-    return { data: demo.buildOrgChart(), scope: 'all', viewerId: current.id };
-  }
-  if (route === '/employees/options') {
-    return ok(demo.PEOPLE.map((p: any) => ({
-      id: p.id, name: p.fullName, employeeCode: p.employeeCode,
-      designation: p.designation, department: p.department,
-    })));
-  }
-  if (/^\/employees\/[^/]+\/reporting-line$/.test(route)) {
-    return { chain: [], directReports: 0, totalReports: 0 };
-  }
-  if (/^\/employees\/[^/]+\/work-history$/.test(route)) {
-    return { employee: current, from: '', to: '', days: [] };
-  }
-  if (/^\/employees\/[^/]+$/.test(route) && method === 'GET') {
-    const person = demo.byId(route.split('/')[2]) ?? current;
-    return { data: person, taskStats: { IN_PROGRESS: 2, COMPLETED: 1 }, leaveBalances: demo.LEAVE_BALANCES };
-  }
-  if (route === '/employees' && method === 'POST') {
-    const bodyObj = body || {};
-    const newEmp = {
-      id: 'usr_' + Date.now(),
-      employeeCode: bodyObj.employeeCode || `EMP00${demo.PEOPLE.length + 1}`,
-      email: (bodyObj.email || '').toLowerCase().trim(),
-      firstName: bodyObj.firstName || 'New',
-      lastName: bodyObj.lastName || 'Employee',
-      fullName: `${bodyObj.firstName || 'New'} ${bodyObj.lastName || 'Employee'}`,
-      phone: bodyObj.phone || null,
-      avatarUrl: null,
-      role: current.role,
-      department: { id: 'dept_eng', name: 'Engineering', code: 'ENG' },
-      manager: current,
-      teams: [],
-      designation: bodyObj.designation || 'Software Engineer',
-      employmentType: bodyObj.employmentType || 'FULL_TIME',
-      workMode: bodyObj.workMode || 'ONSITE',
-      dateOfJoining: new Date().toISOString(),
-      dateOfBirth: '1995-01-01',
-      gender: 'Other',
-      address: 'San Francisco, CA',
-      emergencyContactName: 'Emergency Contact',
-      emergencyContactPhone: '+1 555-0000',
-      shiftStart: '09:30',
-      shiftEnd: '18:30',
-      workingDays: [1, 2, 3, 4, 5],
-      timezone: 'Asia/Kolkata',
-      status: 'ACTIVE',
-      mustChangePassword: false,
-      lastLoginAt: null,
-      createdAt: new Date().toISOString(),
-    };
-    demo.PEOPLE.unshift(newEmp);
-    return { data: newEmp, temporaryPassword: bodyObj.password || 'Company@123' };
-  }
-  if (route === '/employees') return page(demo.PEOPLE);
-
-  // --- SOD / EOD ----------------------------------------------------------
-  if (route === '/sod/today') return { data: demo.SOD_TODAY, taskCount: 2 };
-  if (route === '/sod/history') return page([demo.SOD_TODAY]);
-  if (/^\/sod\/\d{4}-\d{2}-\d{2}$/.test(route)) return ok(demo.SOD_TODAY);
-  if (route === '/eod/today') return ok(demo.EOD_TODAY);
-  if (route === '/eod/history') return page([demo.EOD_TODAY]);
-  if (route === '/eod/review-queue') return ok([]);
-
-  // --- attendance ---------------------------------------------------------
-  if (route === '/attendance/today') {
-    return { data: demo.ATTENDANCE_TODAY, today: demo.ATTENDANCE_TODAY.date, canCheckIn: false, canCheckOut: true };
-  }
-  if (route === '/attendance/corrections/list') return page([]);
-  if (route === '/attendance') {
-    return { ...page(demo.ATTENDANCE_HISTORY), summary: { PRESENT: { count: 9, minutes: 4905 }, LATE: { count: 2, minutes: 1090 } } };
-  }
-
-  // --- leave --------------------------------------------------------------
-  if (route === '/leave/types') return ok(demo.LEAVE_TYPES);
-  if (route === '/leave/balance') return ok(demo.LEAVE_BALANCES);
-  if (route === '/leave/holidays') return ok(demo.HOLIDAYS);
-  if (route === '/leave/estimate') return { days: 1 };
-  if (route === '/leave') return page(demo.LEAVE_REQUESTS);
-
-  // --- sessions -----------------------------------------------------------
-  if (route === '/sessions/active') return { data: demo.SESSIONS, total: demo.SESSIONS.length };
-  if (route === '/sessions') return { ...page(demo.SESSIONS), activeCount: demo.SESSIONS.length };
-
-  // --- notifications ------------------------------------------------------
-  if (route === '/notifications/unread-count') {
-    return { count: demo.NOTIFICATIONS.filter((n: any) => !n.isRead).length };
-  }
-  if (route === '/notifications') {
-    return { ...page(demo.NOTIFICATIONS), unread: demo.NOTIFICATIONS.filter((n: any) => !n.isRead).length };
-  }
-
-  // --- org / settings -----------------------------------------------------
-  if (route === '/org/settings') return ok(demo.SETTINGS);
-  if (route === '/org/departments') return ok(demo.DEPARTMENTS);
-  if (route === '/org/teams') return ok(demo.TEAMS);
-  if (route === '/org/leave-types') return ok(demo.LEAVE_TYPES);
-  if (route === '/org/audit') return page([]);
-  if (route === '/org/roles') {
-    return {
-      data: Object.entries(demo.PERMISSIONS_BY_ROLE).map(([key, permissions], i) => ({
-        id: `rol_${key}`, key, name: key.replace(/_/g, ' '), description: null,
-        portal: key === 'EMPLOYEE' ? 'EMPLOYEE' : 'ADMIN', rank: i * 10,
-        isSystem: true, userCount: demo.PEOPLE.filter((p: any) => p.role.key === key).length,
-        permissions,
-      })),
-      catalogue: [],
-    };
-  }
-
-  // --- reports ------------------------------------------------------------
-  if (route.startsWith('/reports')) return demo.REPORT_ROWS;
-
-  // --- recurring / templates / documents / jobs ---------------------------
-  if (route === '/recurring-tasks' || route === '/task-templates' || route === '/documents') {
-    return ok([]);
-  }
-  if (route === '/jobs') return ok([]);
-
-  // Writes: acknowledge so the UI advances, but nothing is stored.
-  if (method !== 'GET') return { ok: true, demo: true };
-
-  return page([]);
-}
-
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -390,9 +129,6 @@ type RequestOptions = {
 };
 
 async function request<T>(path: string, options: RequestOptions = {}, retry = true): Promise<T> {
-  // In demo mode there is no backend at all, so serve canned data directly
-  // rather than firing a request that is guaranteed to fail.
-  if (isDemoMode()) return handleMockFallback(path, options) as T;
 
   // Proactively refresh if access token has expired and a refresh token exists
   if (retry && tokens.refresh && isTokenExpired(tokens.access)) {
@@ -466,31 +202,6 @@ async function request<T>(path: string, options: RequestOptions = {}, retry = tr
   }
 
   if (!res.ok) {
-    if (res.status >= 500) {
-      if (path.startsWith('/auth/login')) {
-        try {
-          const bodyObj = options.body
-            ? typeof options.body === 'string'
-              ? JSON.parse(options.body)
-              : options.body
-            : {};
-          const profile = demo.byEmail(String(bodyObj.email ?? '').toLowerCase().trim());
-          if (profile && bodyObj.password === 'Password@123') {
-            localStorage.setItem('tms.demoMode', 'true');
-            return handleMockFallback(path, options) as T;
-          }
-        } catch {
-          /* proceed to error throw */
-        }
-      } else {
-        const demoUser = localStorage.getItem(DEMO_USER_KEY);
-        const cachedUser = localStorage.getItem('tms.cachedUser');
-        if (demoUser || cachedUser || localStorage.getItem('tms.demoMode') === 'true') {
-          localStorage.setItem('tms.demoMode', 'true');
-          return handleMockFallback(path, options) as T;
-        }
-      }
-    }
     const error = (payload.error ?? {}) as { code?: string; message?: string; details?: unknown };
     throw new ApiError(
       res.status,
@@ -503,15 +214,15 @@ async function request<T>(path: string, options: RequestOptions = {}, retry = tr
   return payload as T;
 }
 
-const apiCache = new Map<string, { data: any; timestamp: number }>();
-const inFlightGets = new Map<string, Promise<any>>();
+const apiCache = new Map<string, { data: unknown; timestamp: number }>();
+const inFlightGets = new Map<string, Promise<unknown>>();
 const trackedStorageKeys = new Set<string>();
 const CACHE_TTL_MS = 60_000; // 60 seconds instant cache
-const REVALIDATE_AFTER_MS = 5_000;
+const REVALIDATE_AFTER_MS = 5_000; // avoid redundant background refetch within 5s
 const STORAGE_CACHE_PREFIX = 'tms_swr_';
 let storageSynced = false;
 
-function getCachedEntry(path: string): { data: any; timestamp: number } | null {
+function getCachedEntry(path: string): { data: unknown; timestamp: number } | null {
   const inMem = apiCache.get(path);
   if (inMem) return inMem;
   try {
@@ -534,7 +245,7 @@ export function getCachedData<T>(path: string): T | null {
   return cached ? (cached.data as T) : null;
 }
 
-function setCachedEntry(path: string, data: any) {
+function setCachedEntry(path: string, data: unknown) {
   const entry = { data, timestamp: Date.now() };
   apiCache.set(path, entry);
   try {

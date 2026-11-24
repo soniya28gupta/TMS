@@ -28,43 +28,77 @@ export type AuthUser = {
   sessionId?: string | null;
 };
 
+const AUTH_USER_CACHE_TTL_MS = 15_000;
+const authUserCache = new Map<string, { user: AuthUser; expiresAt: number }>();
+const authUserInFlight = new Map<string, Promise<AuthUser | null>>();
+
+export function invalidateAuthUserCache(userId?: string): void {
+  if (userId) {
+    authUserCache.delete(userId);
+  } else {
+    authUserCache.clear();
+  }
+}
+
 export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      role: { include: { permissions: true } },
-      teamMemberships: { select: { teamId: true } },
-      teamsLed: { select: { id: true } },
-    },
+  const now = Date.now();
+  const cached = authUserCache.get(userId);
+  if (cached && cached.expiresAt > now) {
+    return { ...cached.user };
+  }
+
+  const existing = authUserInFlight.get(userId);
+  if (existing) {
+    const res = await existing;
+    return res ? { ...res } : null;
+  }
+
+  const promise = (async () => {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        role: { include: { permissions: true } },
+        teamMemberships: { select: { teamId: true } },
+        teamsLed: { select: { id: true } },
+      },
+    });
+    if (!user) return null;
+
+    const teamIds = [
+      ...new Set([...user.teamMemberships.map((m) => m.teamId), ...user.teamsLed.map((t) => t.id)]),
+    ];
+
+    const authUser: AuthUser = {
+      id: user.id,
+      email: user.email,
+      employeeCode: user.employeeCode,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      roleId: user.roleId,
+      roleKey: user.role.key,
+      roleName: user.role.name,
+      portal: user.role.portal,
+      permissions: new Set(user.role.permissions.map((p) => p.permission)),
+      departmentId: user.departmentId,
+      managerId: user.managerId,
+      teamIds,
+      timezone: user.timezone,
+      status: user.status,
+      mustChangePassword: user.mustChangePassword,
+      hierarchyPath: user.hierarchyPath,
+      hierarchyDepth: user.hierarchyDepth,
+      locationConsentAt: user.locationConsentAt,
+      locationConsentVersion: user.locationConsentVersion,
+    };
+
+    authUserCache.set(userId, { user: authUser, expiresAt: Date.now() + AUTH_USER_CACHE_TTL_MS });
+    return { ...authUser };
+  })().finally(() => {
+    authUserInFlight.delete(userId);
   });
-  if (!user) return null;
 
-  const teamIds = [
-    ...new Set([...user.teamMemberships.map((m) => m.teamId), ...user.teamsLed.map((t) => t.id)]),
-  ];
-
-  return {
-    id: user.id,
-    email: user.email,
-    employeeCode: user.employeeCode,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    roleId: user.roleId,
-    roleKey: user.role.key,
-    roleName: user.role.name,
-    portal: user.role.portal,
-    permissions: new Set(user.role.permissions.map((p) => p.permission)),
-    departmentId: user.departmentId,
-    managerId: user.managerId,
-    teamIds,
-    timezone: user.timezone,
-    status: user.status,
-    mustChangePassword: user.mustChangePassword,
-    hierarchyPath: user.hierarchyPath,
-    hierarchyDepth: user.hierarchyDepth,
-    locationConsentAt: user.locationConsentAt,
-    locationConsentVersion: user.locationConsentVersion,
-  };
+  authUserInFlight.set(userId, promise);
+  return promise;
 }
 
 export function can(user: AuthUser, permission: string): boolean {

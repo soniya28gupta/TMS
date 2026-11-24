@@ -44,6 +44,7 @@ export function createApp() {
   void syncSuperAdminEmail();
 
   const app = express();
+  app.disable('x-powered-by');
 
   // Behind Vercel/Render/Railway/Nginx the real client IP arrives in X-Forwarded-For.
   app.set('trust proxy', true);

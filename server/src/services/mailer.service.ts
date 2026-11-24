@@ -13,6 +13,9 @@ function getTransporter(): Transporter | null {
       port: env.smtp.port,
       secure: env.smtp.secure,
       auth: env.smtp.user ? { user: env.smtp.user, pass: env.smtp.pass } : undefined,
+      connectionTimeout: 5_000,
+      greetingTimeout: 5_000,
+      socketTimeout: 8_000,
     });
     transporterReady = true;
   }
@@ -56,6 +59,7 @@ async function sendViaResend(mail: {
       html: mail.html,
       text: mail.text || undefined,
     }),
+    signal: AbortSignal.timeout(8_000),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');

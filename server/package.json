@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma db push",
     "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:supabase": "tsx scripts/migrate-sqlite-to-supabase.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:bootstrap": "tsx prisma/bootstrap.ts",
     "admin:create": "tsx scripts/create-admin.ts",

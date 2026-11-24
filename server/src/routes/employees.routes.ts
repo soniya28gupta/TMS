@@ -8,7 +8,7 @@ import { DATE_RE, addDays, todayInTz } from '../lib/dates';
 import { writeJson } from '../lib/json';
 import { EMPLOYMENT_TYPE, USER_STATUS, WORK_MODE } from '../constants';
 import { authenticate, currentUser, requirePermission } from '../auth/middleware';
-import { assertCanTouchUser, can, requireScope, visibleUserIds } from '../auth/rbac';
+import { assertCanTouchUser, can, invalidateAuthUserCache, requireScope, visibleUserIds } from '../auth/rbac';
 import { USER_INCLUDE, nextEmployeeCode, toUserDto } from '../services/user.service';
 import { hashPassword, passwordProblems } from '../auth/password';
 import { revokeAllRefreshTokens } from '../auth/tokens';
@@ -490,6 +490,7 @@ employeesRouter.patch(
       }
     }
 
+    invalidateAuthUserCache(updated.id);
     await auditFromRequest(req, {
       action: 'employee.update',
       entity: 'User',
@@ -518,6 +519,7 @@ employeesRouter.post(
     });
     // A deactivated account must lose its live sessions immediately.
     if (body.status !== 'ACTIVE') await revokeAllRefreshTokens(updated.id);
+    invalidateAuthUserCache(updated.id);
 
     await auditFromRequest(req, {
       action: 'employee.status',

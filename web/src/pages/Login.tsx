@@ -1,16 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { ApiError, isDemoMode, isTokenExpired, tokens } from '../lib/api';
+import { api, ApiError, isTokenExpired, tokens } from '../lib/api';
 import { Button, ErrorNote, Field, Input } from '../components/ui';
 
-interface DemoAccount {
+interface TestAccount {
   label: string;
   email: string;
   role?: string;
 }
 
-const DEFAULT_DEMO_ACCOUNTS: DemoAccount[] = [
+const DEFAULT_ACCOUNTS: TestAccount[] = [
   { label: 'Super Admin', email: 'admin@acme.test', role: 'SUPER_ADMIN' },
   { label: 'HR Admin', email: 'hr@acme.test', role: 'HR_ADMIN' },
   { label: 'Manager', email: 'manager@acme.test', role: 'MANAGER' },
@@ -26,42 +26,23 @@ export default function Login() {
   const [selectedEmail, setSelectedEmail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [demoActive, setDemoActive] = useState(isDemoMode());
-  const demoAccounts = DEFAULT_DEMO_ACCOUNTS;
-  const demoPassword = 'Password@123';
+  const accounts = DEFAULT_ACCOUNTS;
+  const defaultPassword = 'Password@123';
 
   useEffect(() => {
+    localStorage.removeItem('tms.demoMode');
+    localStorage.removeItem('tms.demoUser');
     // If on the login page with an expired or absent access token, clear stale refresh tokens
     if (!tokens.access || isTokenExpired(tokens.access)) {
       tokens.clear();
     }
   }, []);
 
-  const handleSelectDemo = (account: DemoAccount) => {
+  const handleSelectAccount = (account: TestAccount) => {
     setSelectedEmail(account.email);
     setEmail(account.email);
-    setPassword(demoPassword);
+    setPassword(defaultPassword);
     setError(null);
-  };
-
-  const handleLaunchDemo = async (targetEmail?: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      localStorage.setItem('tms.demoMode', 'true');
-      setDemoActive(true);
-      const chosenEmail = targetEmail || email || demoAccounts[0].email;
-      const loggedUser = await login(chosenEmail, demoPassword);
-      if (loggedUser?.role?.portal === 'ADMIN') {
-        navigate('/admin');
-      } else {
-        navigate('/');
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Could not launch demo mode.');
-    } finally {
-      setBusy(false);
-    }
   };
 
   const onSubmit = async (event: FormEvent) => {
@@ -76,23 +57,6 @@ export default function Login() {
         navigate('/');
       }
     } catch (err) {
-      // If server error occurs on demo account, automatically switch to demo mode
-      const isDemo = demoAccounts.some((a) => a.email.toLowerCase() === email.trim().toLowerCase());
-      if (isDemo && password === demoPassword) {
-        try {
-          localStorage.setItem('tms.demoMode', 'true');
-          setDemoActive(true);
-          const loggedUser = await login(email.trim(), password);
-          if (loggedUser?.role?.portal === 'ADMIN') {
-            navigate('/admin');
-          } else {
-            navigate('/');
-          }
-          return;
-        } catch {
-          /* continue to show error */
-        }
-      }
       setError(err instanceof ApiError ? err.message : 'Could not sign in. Please try again.');
     } finally {
       setBusy(false);
@@ -190,24 +154,17 @@ export default function Login() {
           </form>
 
           <div className="mt-8 rounded-lg border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Demo accounts
-              </p>
-              {demoActive ? (
-                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
-                  Demo Mode On
-                </span>
-              ) : null}
-            </div>
-            <div className="mt-2 grid gap-1.5" role="group" aria-label="Demo accounts">
-              {demoAccounts.map((account) => {
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Test accounts
+            </p>
+            <div className="mt-2 grid gap-1.5" role="group" aria-label="Test accounts">
+              {accounts.map((account) => {
                 const isSelected = selectedEmail === account.email && email === account.email;
                 return (
                   <button
                     key={account.email}
                     type="button"
-                    onClick={() => handleSelectDemo(account)}
+                    onClick={() => handleSelectAccount(account)}
                     aria-pressed={isSelected}
                     className={`group flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-500/20 ${
                       isSelected
@@ -227,18 +184,9 @@ export default function Login() {
                 );
               })}
             </div>
-            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
-              <p className="text-[11px] text-slate-400">
-                Password: <code className="font-mono text-slate-500">Password@123</code>
-              </p>
-              <button
-                type="button"
-                onClick={() => handleLaunchDemo()}
-                className="text-xs font-medium text-brand-600 hover:text-brand-700 hover:underline cursor-pointer"
-              >
-                Instant Access (Demo Mode) →
-              </button>
-            </div>
+            <p className="mt-2.5 text-[11px] text-slate-400">
+              All test accounts use the password <code className="font-mono text-slate-500">Password@123</code>.
+            </p>
           </div>
         </div>
       </div>

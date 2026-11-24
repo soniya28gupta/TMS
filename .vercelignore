@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+.vercel
+web/dist
+server/dist
+server/prisma/dev.db
+server/prisma/dev.db-journal
+storage
+*.log
+*.zip
+*.tar.gz
+*.backup

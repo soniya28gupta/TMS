@@ -8,7 +8,7 @@
     "silent": true
   },
   "regions": [
-    "bom1"
+    "hnd1"
   ],
   "functions": {
     "api/index.ts": {

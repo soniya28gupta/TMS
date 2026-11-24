@@ -21,6 +21,33 @@ function extractToken(req: Request): string | null {
   return cookieToken ?? null;
 }
 
+const SESSION_CACHE_TTL_MS = 10_000;
+const sessionActiveCache = new Map<string, { active: boolean; expiresAt: number }>();
+
+export function invalidateSessionCache(sessionId?: string): void {
+  if (sessionId) {
+    sessionActiveCache.delete(sessionId);
+  } else {
+    sessionActiveCache.clear();
+  }
+}
+
+async function isSessionActive(sessionId: string): Promise<boolean> {
+  const now = Date.now();
+  const cached = sessionActiveCache.get(sessionId);
+  if (cached && cached.expiresAt > now) {
+    return cached.active;
+  }
+  const session = await prisma.userSession.findUnique({
+    where: { id: sessionId },
+    select: { isActive: true },
+  });
+  // If session row doesn't exist, treat as valid unless explicitly inactive (preserves original logic)
+  const active = session ? session.isActive : true;
+  sessionActiveCache.set(sessionId, { active, expiresAt: now + SESSION_CACHE_TTL_MS });
+  return active;
+}
+
 export const authenticate: RequestHandler = (req, _res, next) => {
   const token = extractToken(req);
   if (!token) return next(unauthorized());
@@ -28,18 +55,15 @@ export const authenticate: RequestHandler = (req, _res, next) => {
   void (async () => {
     try {
       const payload = verifyAccessToken(token);
-      const user = await loadAuthUser(payload.sub);
+      const [user, sessionOk] = await Promise.all([
+        loadAuthUser(payload.sub),
+        payload.sid ? isSessionActive(payload.sid) : Promise.resolve(true),
+      ]);
       if (!user) return next(unauthorized('Account no longer exists'));
       if (user.status !== 'ACTIVE') return next(forbidden('Your account is not active'));
+      if (!sessionOk) return next(unauthorized('This session has been signed out'));
 
-      // A signed-out session must stop working immediately, even while its
-      // short-lived access token is still cryptographically valid.
       if (payload.sid) {
-        const session = await prisma.userSession.findUnique({
-          where: { id: payload.sid },
-          select: { isActive: true },
-        });
-        if (session && !session.isActive) return next(unauthorized('This session has been signed out'));
         user.sessionId = payload.sid;
         void touchSession(payload.sid);
       }

@@ -39,13 +39,25 @@ type DayContext = {
   holidays: Set<string>;
 };
 
-export async function loadDayContext(): Promise<DayContext> {
-  const settings = await getSettings();
+let cachedHolidays: { dates: Set<string>; expiresAt: number } | null = null;
+
+async function getHolidayDates(): Promise<Set<string>> {
+  const now = Date.now();
+  if (cachedHolidays && cachedHolidays.expiresAt > now) {
+    return cachedHolidays.dates;
+  }
   const holidays = await prisma.holiday.findMany({ select: { date: true } });
+  const dates = new Set(holidays.map((h) => h.date));
+  cachedHolidays = { dates, expiresAt: now + 60_000 };
+  return dates;
+}
+
+export async function loadDayContext(): Promise<DayContext> {
+  const [settings, holidays] = await Promise.all([getSettings(), getHolidayDates()]);
   return {
     timezone: settings.timezone,
     workingDays: settings.workingDays,
-    holidays: new Set(holidays.map((h) => h.date)),
+    holidays,
   };
 }
 
