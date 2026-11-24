@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { queryString } from '../lib/api';
 import { useApi } from '../lib/hooks';
@@ -57,7 +57,15 @@ export function TaskListView({
   refreshKey?: number;
 }) {
   const [filters, setFilters] = useState<TaskFilters>({});
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch((filters.search ?? '').trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [filters.search]);
 
   const query = queryString({
     page,
@@ -66,10 +74,10 @@ export function TaskListView({
     priority: filters.priority,
     assigneeId: fixedAssigneeId ?? filters.assigneeId,
     departmentId: filters.departmentId,
-    search: filters.search,
+    search: debouncedSearch || undefined,
   });
 
-  const { data, loading, error } = useApi<Paginated<Task>>(`/tasks${query}`, [refreshKey]);
+  const { data, loading, error } = useApi<Paginated<Task>>(`/tasks${query}`, [query, refreshKey]);
 
   const update = (patch: TaskFilters) => {
     setFilters((current) => ({ ...current, ...patch }));
@@ -141,7 +149,7 @@ export function TaskListView({
           description="Try clearing the search or choosing a different status."
         />
       ) : (
-        <>
+        <div className={loading ? 'opacity-70 transition-opacity' : 'transition-opacity'}>
           <Table
             head={
               <tr>
@@ -214,7 +222,7 @@ export function TaskListView({
             total={data.meta.total}
             onChange={setPage}
           />
-        </>
+        </div>
       )}
     </div>
   );

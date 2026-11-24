@@ -54,6 +54,16 @@ function RequirePermission({
   return children;
 }
 
+const pageFallback = (
+  <div className="flex min-h-[240px] items-center justify-center">
+    <Spinner label="Loading…" />
+  </div>
+);
+
+function withPageSuspense(element: JSX.Element) {
+  return <Suspense fallback={pageFallback}>{element}</Suspense>;
+}
+
 export default function App() {
   const { user, loading } = useAuth();
 
@@ -64,12 +74,6 @@ export default function App() {
       </div>
     );
   }
-
-  const pageFallback = (
-    <div className="flex min-h-[240px] items-center justify-center">
-      <Spinner label="Loading…" />
-    </div>
-  );
 
   if (!user) {
     return (
@@ -85,40 +89,37 @@ export default function App() {
   }
 
   return (
-    <Suspense fallback={pageFallback}>
-      <Routes>
+    <Routes>
       <Route path="/login" element={<Navigate to={user?.role?.portal === 'ADMIN' ? '/admin' : '/'} replace />} />
       <Route path="/forgot-password" element={<Navigate to="/" replace />} />
       <Route path="/reset-password" element={<Navigate to="/" replace />} />
       <Route element={<Layout />}>
-        {/* Employee portal — available to every signed-in user */}
-        <Route index element={<EmployeeDashboard />} />
-        <Route path="tasks" element={<MyTasks />} />
-        <Route path="tasks/:id" element={<TaskDetail />} />
-        <Route path="projects" element={<Projects />} />
-        <Route path="projects/:id" element={<ProjectDetail />} />
-        <Route path="sod" element={<SodPage />} />
-        <Route path="eod" element={<EodPage />} />
-        <Route path="attendance" element={<AttendancePage />} />
-        <Route path="leave" element={<LeavePage />} />
-        <Route path="profile" element={<ProfilePage />} />
+        <Route index element={withPageSuspense(<EmployeeDashboard />)} />
+        <Route path="tasks" element={withPageSuspense(<MyTasks />)} />
+        <Route path="tasks/:id" element={withPageSuspense(<TaskDetail />)} />
+        <Route path="projects" element={withPageSuspense(<Projects />)} />
+        <Route path="projects/:id" element={withPageSuspense(<ProjectDetail />)} />
+        <Route path="sod" element={withPageSuspense(<SodPage />)} />
+        <Route path="eod" element={withPageSuspense(<EodPage />)} />
+        <Route path="attendance" element={withPageSuspense(<AttendancePage />)} />
+        <Route path="leave" element={withPageSuspense(<LeavePage />)} />
+        <Route path="profile" element={withPageSuspense(<ProfilePage />)} />
 
-        {/* Admin portal — every route is permission-gated */}
         <Route
           path="admin"
           element={
             <RequirePermission permissions={['employee.read.team', 'employee.read.department', 'employee.read.all']}>
-              <AdminDashboard />
+              {withPageSuspense(<AdminDashboard />)}
             </RequirePermission>
           }
         />
-        <Route path="admin/access-grants" element={<AccessGrants />} />
-        <Route path="admin/hierarchy" element={<OrgHierarchy />} />
+        <Route path="admin/access-grants" element={withPageSuspense(<AccessGrants />)} />
+        <Route path="admin/hierarchy" element={withPageSuspense(<OrgHierarchy />)} />
         <Route
           path="admin/employees"
           element={
             <RequirePermission permissions={['employee.read.team', 'employee.read.department', 'employee.read.all']}>
-              <Employees />
+              {withPageSuspense(<Employees />)}
             </RequirePermission>
           }
         />
@@ -126,7 +127,7 @@ export default function App() {
           path="admin/employees/:id"
           element={
             <RequirePermission permissions={['employee.read.team', 'employee.read.department', 'employee.read.all']}>
-              <EmployeeDetail />
+              {withPageSuspense(<EmployeeDetail />)}
             </RequirePermission>
           }
         />
@@ -134,16 +135,16 @@ export default function App() {
           path="admin/tasks"
           element={
             <RequirePermission permissions={['task.read.team', 'task.read.department', 'task.read.all']}>
-              <AdminTasks />
+              {withPageSuspense(<AdminTasks />)}
             </RequirePermission>
           }
         />
-        <Route path="admin/tasks/:id" element={<TaskDetail />} />
+        <Route path="admin/tasks/:id" element={withPageSuspense(<TaskDetail />)} />
         <Route
           path="admin/review"
           element={
             <RequirePermission permissions={['task.review']}>
-              <ReviewQueue />
+              {withPageSuspense(<ReviewQueue />)}
             </RequirePermission>
           }
         />
@@ -151,7 +152,7 @@ export default function App() {
           path="admin/org-chart"
           element={
             <RequirePermission permissions={['employee.hierarchy.read']}>
-              <OrgChart />
+              {withPageSuspense(<OrgChart />)}
             </RequirePermission>
           }
         />
@@ -159,7 +160,7 @@ export default function App() {
           path="admin/activity"
           element={
             <RequirePermission permissions={['session.read.team', 'session.read.reports', 'session.read.department', 'session.read.all']}>
-              <Activity />
+              {withPageSuspense(<Activity />)}
             </RequirePermission>
           }
         />
@@ -167,7 +168,7 @@ export default function App() {
           path="admin/assign-sod"
           element={
             <RequirePermission permissions={['sod.assign']}>
-              <AssignSod />
+              {withPageSuspense(<AssignSod />)}
             </RequirePermission>
           }
         />
@@ -175,7 +176,7 @@ export default function App() {
           path="admin/sod-eod"
           element={
             <RequirePermission permissions={['sod.read.team', 'sod.read.department', 'sod.read.all']}>
-              <SodEodMonitor />
+              {withPageSuspense(<SodEodMonitor />)}
             </RequirePermission>
           }
         />
@@ -183,7 +184,7 @@ export default function App() {
           path="admin/attendance"
           element={
             <RequirePermission permissions={['attendance.read.team', 'attendance.read.department', 'attendance.read.all']}>
-              <AdminAttendance />
+              {withPageSuspense(<AdminAttendance />)}
             </RequirePermission>
           }
         />
@@ -191,7 +192,7 @@ export default function App() {
           path="admin/leave"
           element={
             <RequirePermission permissions={['leave.approve', 'leave.read.department', 'leave.read.all']}>
-              <AdminLeave />
+              {withPageSuspense(<AdminLeave />)}
             </RequirePermission>
           }
         />
@@ -199,7 +200,7 @@ export default function App() {
           path="admin/reports"
           element={
             <RequirePermission permissions={['report.read.team', 'report.read.department', 'report.read.all']}>
-              <Reports />
+              {withPageSuspense(<Reports />)}
             </RequirePermission>
           }
         />
@@ -207,13 +208,12 @@ export default function App() {
           path="admin/settings"
           element={
             <RequirePermission permissions={['settings.read', 'role.manage', 'org.manage', 'holiday.manage', 'task.recurring.manage']}>
-              <Settings />
+              {withPageSuspense(<Settings />)}
             </RequirePermission>
           }
         />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+    </Routes>
   );
 }

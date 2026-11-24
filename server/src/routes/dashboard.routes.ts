@@ -20,6 +20,18 @@ const DASHBOARD_CACHE_TTL_MS = 5000;
 const DASHBOARD_CACHE_MAX_ENTRIES = 200;
 const dashboardCache = new Map<string, { expiresAt: number; payload: unknown }>();
 
+// Short-lived settings cache (15s TTL) to avoid redundant DB round-trips per request
+let cachedSettings: { expiresAt: number; value: Awaited<ReturnType<typeof getSettings>> } | null = null;
+
+async function getCachedSettings() {
+  if (cachedSettings && Date.now() < cachedSettings.expiresAt) {
+    return cachedSettings.value;
+  }
+  const value = await getSettings();
+  cachedSettings = { expiresAt: Date.now() + 15000, value };
+  return value;
+}
+
 function getCachedDashboard<T>(key: string): T | null {
   const entry = dashboardCache.get(key);
   if (!entry) return null;
@@ -46,7 +58,7 @@ dashboardRouter.get(
   '/me',
   handler(async (req, res) => {
     const user = currentUser(req);
-    const settings = await getSettings();
+    const settings = await getCachedSettings();
     const today = todayInTz(settings.timezone);
     const year = new Date().getUTCFullYear();
 
@@ -221,7 +233,7 @@ dashboardRouter.get(
   '/admin',
   handler(async (req, res) => {
     const user = currentUser(req);
-    const settings = await getSettings();
+    const settings = await getCachedSettings();
     const today = todayInTz(settings.timezone);
 
     const q = parse(
@@ -252,7 +264,6 @@ dashboardRouter.get(
       ...(q.employeeId ? { id: q.employeeId } : {}),
     };
 
-    // Run people lookup, newEmployees count, and departments list together
     const [people, newEmployees, departmentsData] = await Promise.all([
       prisma.user.findMany({ where: peopleWhere, select: { id: true } }),
       prisma.user.count({
@@ -272,10 +283,10 @@ dashboardRouter.get(
     ]);
 
     const userIds = people.map((p) => p.id);
+    const hasUsers = userIds.length > 0;
     const scopedUser = { userId: { in: userIds } };
     const trendDays = Array.from({ length: 7 }, (_, i) => addDays(q.date, i - 6));
 
-    // Execute all user-scoped dashboard, trend, and roster queries in a single parallel batch
     const [
       attendanceGroups,
       taskGroups,
@@ -293,49 +304,65 @@ dashboardRouter.get(
       todayEodsList,
       activeTasksPerUser,
     ] = await Promise.all([
-      prisma.attendance.groupBy({
-        by: ['status'],
-        where: { ...scopedUser, date: q.date },
-        _count: { _all: true },
-      }),
-      prisma.task.groupBy({
-        by: ['status'],
-        where: { assigneeId: { in: userIds } },
-        _count: { _all: true },
-      }),
-      prisma.task.count({
-        where: { assigneeId: { in: userIds }, isOverdue: true, status: { notIn: CLOSED_TASK_STATUSES } },
-      }),
-      prisma.sod.groupBy({
-        by: ['status'],
-        where: { ...scopedUser, date: q.date },
-        _count: { _all: true },
-      }),
-      prisma.eod.groupBy({
-        by: ['status'],
-        where: { ...scopedUser, date: q.date },
-        _count: { _all: true },
-      }),
-      prisma.leaveRequest.count({
-        where: {
-          userId: { in: userIds },
-          status: 'APPROVED',
-          startDate: { lte: q.date },
-          endDate: { gte: q.date },
-        },
-      }),
-      prisma.leaveRequest.count({ where: { userId: { in: userIds }, status: 'PENDING' } }),
-      prisma.task.count({
-        where: { assigneeId: { in: userIds }, status: 'SUBMITTED_FOR_REVIEW' },
-      }),
-      userIds.length
+      hasUsers
+        ? prisma.attendance.groupBy({
+          by: ['status'],
+          where: { ...scopedUser, date: q.date },
+          _count: { _all: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.task.groupBy({
+          by: ['status'],
+          where: { assigneeId: { in: userIds } },
+          _count: { _all: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.task.count({
+          where: { assigneeId: { in: userIds }, isOverdue: true, status: { notIn: CLOSED_TASK_STATUSES } },
+        })
+        : Promise.resolve(0),
+      hasUsers
+        ? prisma.sod.groupBy({
+          by: ['status'],
+          where: { ...scopedUser, date: q.date },
+          _count: { _all: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.eod.groupBy({
+          by: ['status'],
+          where: { ...scopedUser, date: q.date },
+          _count: { _all: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.leaveRequest.count({
+          where: {
+            userId: { in: userIds },
+            status: 'APPROVED',
+            startDate: { lte: q.date },
+            endDate: { gte: q.date },
+          },
+        })
+        : Promise.resolve(0),
+      hasUsers
+        ? prisma.leaveRequest.count({ where: { userId: { in: userIds }, status: 'PENDING' } })
+        : Promise.resolve(0),
+      hasUsers
+        ? prisma.task.count({
+          where: { assigneeId: { in: userIds }, status: 'SUBMITTED_FOR_REVIEW' },
+        })
+        : Promise.resolve(0),
+      hasUsers
         ? prisma.eod.groupBy({
           by: ['date', 'status'],
           where: { ...scopedUser, date: { in: trendDays } },
           _count: { _all: true },
         })
         : Promise.resolve([]),
-      userIds.length
+      hasUsers
         ? prisma.task.findMany({
           where: {
             assigneeId: { in: userIds },
@@ -347,39 +374,49 @@ dashboardRouter.get(
           select: { completedAt: true },
         })
         : Promise.resolve([]),
-      prisma.user.findMany({
-        where: peopleWhere,
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          employeeCode: true,
-          workMode: true,
-          department: { select: { id: true, name: true } },
-          position: { select: { title: true, band: true, level: true } },
-          role: { select: { name: true, key: true } },
-          manager: { select: { id: true, firstName: true, lastName: true, designation: true } },
-        },
-        orderBy: [{ hierarchyDepth: 'asc' }, { firstName: 'asc' }],
-      }),
-      prisma.attendance.findMany({
-        where: { ...scopedUser, date: q.date },
-        select: { userId: true, status: true, checkInAt: true, workMode: true },
-      }),
-      prisma.sod.findMany({
-        where: { ...scopedUser, date: q.date },
-        select: { userId: true, status: true },
-      }),
-      prisma.eod.findMany({
-        where: { ...scopedUser, date: q.date },
-        select: { userId: true, status: true },
-      }),
-      prisma.task.groupBy({
-        by: ['assigneeId'],
-        where: { assigneeId: { in: userIds }, status: { notIn: CLOSED_TASK_STATUSES } },
-        _count: { _all: true },
-      }),
+      hasUsers
+        ? prisma.user.findMany({
+          where: peopleWhere,
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            employeeCode: true,
+            workMode: true,
+            department: { select: { id: true, name: true } },
+            position: { select: { title: true, band: true, level: true } },
+            role: { select: { name: true, key: true } },
+            manager: { select: { id: true, firstName: true, lastName: true, designation: true } },
+          },
+          orderBy: [{ hierarchyDepth: 'asc' }, { firstName: 'asc' }],
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.attendance.findMany({
+          where: { ...scopedUser, date: q.date },
+          select: { userId: true, status: true, checkInAt: true, workMode: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.sod.findMany({
+          where: { ...scopedUser, date: q.date },
+          select: { userId: true, status: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.eod.findMany({
+          where: { ...scopedUser, date: q.date },
+          select: { userId: true, status: true },
+        })
+        : Promise.resolve([]),
+      hasUsers
+        ? prisma.task.groupBy({
+          by: ['assigneeId'],
+          where: { assigneeId: { in: userIds }, status: { notIn: CLOSED_TASK_STATUSES } },
+          _count: { _all: true },
+        })
+        : Promise.resolve([]),
     ]);
 
     const totalEmployees = people.length;
