@@ -18,7 +18,7 @@
     "dev:server": "npm run -w server dev",
     "dev:web": "npm run -w web dev",
     "build": "npm run -w server build && npm run -w web build",
-    "vercel-build": "npx prisma generate --schema server/prisma/schema.prisma && npm run -w web build",
+    "vercel-build": "node -e \"const fs=require('fs'),p='server/prisma/schema.prisma',u=process.env.DATABASE_URL||'';if(/^postgres(ql)?:\\/\\//i.test(u)){fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace(/provider\\s*=\\s*\\\"sqlite\\\"/,'provider = \\\"postgresql\\\"'))}\" && npx prisma generate --schema server/prisma/schema.prisma && npm run -w web build",
     "start": "npm run -w server start",
     "typecheck": "npm run -w server typecheck && npm run -w web typecheck",
     "test": "npm run -w server test"
