@@ -15,6 +15,32 @@ import { todayAttendance } from '../services/attendance.service';
 export const dashboardRouter = Router();
 dashboardRouter.use(authenticate);
 
+// Short-lived in-memory read cache (5s TTL) to speed up repeated dashboard reads
+const DASHBOARD_CACHE_TTL_MS = 5000;
+const DASHBOARD_CACHE_MAX_ENTRIES = 200;
+const dashboardCache = new Map<string, { expiresAt: number; payload: unknown }>();
+
+function getCachedDashboard<T>(key: string): T | null {
+  const entry = dashboardCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    dashboardCache.delete(key);
+    return null;
+  }
+  return entry.payload as T;
+}
+
+function setCachedDashboard(key: string, payload: unknown): void {
+  if (dashboardCache.size >= DASHBOARD_CACHE_MAX_ENTRIES) {
+    const oldestKey = dashboardCache.keys().next().value;
+    if (oldestKey) dashboardCache.delete(oldestKey);
+  }
+  dashboardCache.set(key, {
+    expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
+    payload,
+  });
+}
+
 /** Employee home screen: today's plan, tasks, attendance, leave and EOD state. */
 dashboardRouter.get(
   '/me',
@@ -22,6 +48,14 @@ dashboardRouter.get(
     const user = currentUser(req);
     const settings = await getSettings();
     const today = todayInTz(settings.timezone);
+    const year = new Date().getUTCFullYear();
+
+    const cacheKey = `me:${user.id}:${today}:${year}`;
+    const cached = getCachedDashboard(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
 
     const [
       sod,
@@ -39,7 +73,7 @@ dashboardRouter.get(
       getOrCreateTodaySod(user.id),
       getOrCreateTodayEod(user.id),
       todayAttendance(user.id),
-      balanceSummary(user.id, new Date().getUTCFullYear()),
+      balanceSummary(user.id, year),
       prisma.task.groupBy({
         by: ['status'],
         where: { assigneeId: user.id },
@@ -122,10 +156,10 @@ dashboardRouter.get(
     const byStatus = Object.fromEntries(taskGroups.map((g) => [g.status, g._count._all]));
     const sum = (keys: string[]) => keys.reduce((total, key) => total + (byStatus[key] ?? 0), 0);
 
-    res.json({
+    const payload = {
       date: today,
-      sod: { status: sod?.status ?? 'PENDING', items: sod?.items.length ?? 0, submittedAt: sod?.submittedAt ?? null },
-      eod: { status: eod?.status ?? 'PENDING', items: eod?.items.length ?? 0, submittedAt: eod?.submittedAt ?? null },
+      sod: { status: sod?.status ?? 'PENDING', items: sod?.items?.length ?? 0, submittedAt: sod?.submittedAt ?? null },
+      eod: { status: eod?.status ?? 'PENDING', items: eod?.items?.length ?? 0, submittedAt: eod?.submittedAt ?? null },
       attendance: {
         status: attendance?.status ?? 'NOT_MARKED',
         checkInAt: attendance?.checkInAt ?? null,
@@ -175,7 +209,10 @@ dashboardRouter.get(
         leadName: p.manager ? `${p.manager.firstName} ${p.manager.lastName}` : null,
         departmentName: p.department?.name ?? null,
       })),
-    });
+    };
+
+    setCachedDashboard(cacheKey, payload);
+    res.json(payload);
   }),
 );
 
@@ -200,6 +237,13 @@ dashboardRouter.get(
     const scope = requireScope(user, 'employee.read');
     const allowedIds = await visibleUserIds(user, scope);
 
+    const cacheKey = `admin:${user.id}:${scope}:${q.date}:${q.departmentId ?? ''}:${q.teamId ?? ''}:${q.employeeId ?? ''}`;
+    const cached = getCachedDashboard(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
     const peopleWhere = {
       status: 'ACTIVE',
       ...(allowedIds ? { id: { in: allowedIds } } : {}),
@@ -208,12 +252,31 @@ dashboardRouter.get(
       ...(q.employeeId ? { id: q.employeeId } : {}),
     };
 
-    const people = await prisma.user.findMany({ where: peopleWhere, select: { id: true } });
+    // Run people lookup, newEmployees count, and departments list together
+    const [people, newEmployees, departmentsData] = await Promise.all([
+      prisma.user.findMany({ where: peopleWhere, select: { id: true } }),
+      prisma.user.count({
+        where: { ...peopleWhere, dateOfJoining: { gte: new Date(`${addDays(q.date, -30)}T00:00:00.000Z`) } },
+      }),
+      prisma.department.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          head: { select: { firstName: true, lastName: true } },
+          users: { where: { status: 'ACTIVE' }, select: { id: true } },
+        },
+        orderBy: { name: 'asc' },
+      }),
+    ]);
+
     const userIds = people.map((p) => p.id);
     const scopedUser = { userId: { in: userIds } };
+    const trendDays = Array.from({ length: 7 }, (_, i) => addDays(q.date, i - 6));
 
+    // Execute all user-scoped dashboard, trend, and roster queries in a single parallel batch
     const [
-      newEmployees,
       attendanceGroups,
       taskGroups,
       overdue,
@@ -222,10 +285,14 @@ dashboardRouter.get(
       leaveToday,
       pendingLeave,
       reviewQueue,
+      eodTrendGroups,
+      completedTasksList,
+      rosterUsers,
+      todayAttendanceList,
+      todaySodsList,
+      todayEodsList,
+      activeTasksPerUser,
     ] = await Promise.all([
-      prisma.user.count({
-        where: { ...peopleWhere, dateOfJoining: { gte: new Date(`${addDays(q.date, -30)}T00:00:00.000Z`) } },
-      }),
       prisma.attendance.groupBy({
         by: ['status'],
         where: { ...scopedUser, date: q.date },
@@ -261,6 +328,58 @@ dashboardRouter.get(
       prisma.task.count({
         where: { assigneeId: { in: userIds }, status: 'SUBMITTED_FOR_REVIEW' },
       }),
+      userIds.length
+        ? prisma.eod.groupBy({
+          by: ['date', 'status'],
+          where: { ...scopedUser, date: { in: trendDays } },
+          _count: { _all: true },
+        })
+        : Promise.resolve([]),
+      userIds.length
+        ? prisma.task.findMany({
+          where: {
+            assigneeId: { in: userIds },
+            completedAt: {
+              gte: new Date(`${trendDays[0]}T00:00:00.000Z`),
+              lte: new Date(`${trendDays[6]}T23:59:59.999Z`),
+            },
+          },
+          select: { completedAt: true },
+        })
+        : Promise.resolve([]),
+      prisma.user.findMany({
+        where: peopleWhere,
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          employeeCode: true,
+          workMode: true,
+          department: { select: { id: true, name: true } },
+          position: { select: { title: true, band: true, level: true } },
+          role: { select: { name: true, key: true } },
+          manager: { select: { id: true, firstName: true, lastName: true, designation: true } },
+        },
+        orderBy: [{ hierarchyDepth: 'asc' }, { firstName: 'asc' }],
+      }),
+      prisma.attendance.findMany({
+        where: { ...scopedUser, date: q.date },
+        select: { userId: true, status: true, checkInAt: true, workMode: true },
+      }),
+      prisma.sod.findMany({
+        where: { ...scopedUser, date: q.date },
+        select: { userId: true, status: true },
+      }),
+      prisma.eod.findMany({
+        where: { ...scopedUser, date: q.date },
+        select: { userId: true, status: true },
+      }),
+      prisma.task.groupBy({
+        by: ['assigneeId'],
+        where: { assigneeId: { in: userIds }, status: { notIn: CLOSED_TASK_STATUSES } },
+        _count: { _all: true },
+      }),
     ]);
 
     const totalEmployees = people.length;
@@ -270,30 +389,6 @@ dashboardRouter.get(
     const eod = Object.fromEntries(eodGroups.map((g) => [g.status, g._count._all]));
     const sum = (src: Record<string, number>, keys: string[]) =>
       keys.reduce((total, key) => total + (src[key] ?? 0), 0);
-
-    // 7-day completion trend for the dashboard chart — fetched in 2 batch queries.
-    const trendDays = Array.from({ length: 7 }, (_, i) => addDays(q.date, i - 6));
-    const [eodTrendGroups, completedTasksList] = await Promise.all([
-      userIds.length
-        ? prisma.eod.groupBy({
-            by: ['date', 'status'],
-            where: { ...scopedUser, date: { in: trendDays } },
-            _count: { _all: true },
-          })
-        : [],
-      userIds.length
-        ? prisma.task.findMany({
-            where: {
-              assigneeId: { in: userIds },
-              completedAt: {
-                gte: new Date(`${trendDays[0]}T00:00:00.000Z`),
-                lte: new Date(`${trendDays[6]}T23:59:59.999Z`),
-              },
-            },
-            select: { completedAt: true },
-          })
-        : [],
-    ]);
 
     const eodTotalByDate = new Map<string, number>();
     const eodSubByDate = new Map<string, number>();
@@ -318,52 +413,6 @@ dashboardRouter.get(
       eodSubmitted: eodSubByDate.get(date) ?? 0,
       tasksCompleted: tasksCompletedByDate.get(date) ?? 0,
     }));
-
-    // Department & Hierarchy roster breakdown for Founder Command Center
-    const [departmentsData, rosterUsers, todayAttendanceList, todaySodsList, todayEodsList, activeTasksPerUser] =
-      await Promise.all([
-        prisma.department.findMany({
-          where: { isActive: true },
-          include: {
-            head: { select: { firstName: true, lastName: true } },
-            users: { where: { status: 'ACTIVE' }, select: { id: true } },
-          },
-          orderBy: { name: 'asc' },
-        }),
-        prisma.user.findMany({
-          where: peopleWhere,
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            employeeCode: true,
-            workMode: true,
-            department: { select: { id: true, name: true } },
-            position: { select: { title: true, band: true, level: true } },
-            role: { select: { name: true, key: true } },
-            manager: { select: { id: true, firstName: true, lastName: true, designation: true } },
-          },
-          orderBy: [{ hierarchyDepth: 'asc' }, { firstName: 'asc' }],
-        }),
-        prisma.attendance.findMany({
-          where: { ...scopedUser, date: q.date },
-          select: { userId: true, status: true, checkInAt: true, workMode: true },
-        }),
-        prisma.sod.findMany({
-          where: { ...scopedUser, date: q.date },
-          select: { userId: true, status: true },
-        }),
-        prisma.eod.findMany({
-          where: { ...scopedUser, date: q.date },
-          select: { userId: true, status: true },
-        }),
-        prisma.task.groupBy({
-          by: ['assigneeId'],
-          where: { assigneeId: { in: userIds }, status: { notIn: CLOSED_TASK_STATUSES } },
-          _count: { _all: true },
-        }),
-      ]);
 
     const attMap = new Map(todayAttendanceList.map((a) => [a.userId, a]));
     const sodMap = new Map(todaySodsList.map((s) => [s.userId, s.status]));
@@ -405,11 +454,11 @@ dashboardRouter.get(
         lateToday: deptRoster.filter((r) => r.attendanceStatus === 'LATE').length,
         absentToday: deptRoster.filter((r) => ['ABSENT', 'NOT_MARKED'].includes(r.attendanceStatus)).length,
         sodSubmitted: deptRoster.filter((r) => r.sodStatus === 'SUBMITTED').length,
-        activeTasks: deptRoster.reduce((sum, r) => sum + r.activeTasksCount, 0),
+        activeTasks: deptRoster.reduce((acc, r) => acc + r.activeTasksCount, 0),
       };
     });
 
-    res.json({
+    const payload = {
       date: q.date,
       employees: {
         total: totalEmployees,
@@ -453,6 +502,9 @@ dashboardRouter.get(
       trend,
       departmentBreakdown,
       hierarchyRoster,
-    });
+    };
+
+    setCachedDashboard(cacheKey, payload);
+    res.json(payload);
   }),
 );
